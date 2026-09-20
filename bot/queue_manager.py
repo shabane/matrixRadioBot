@@ -1,27 +1,29 @@
 """
-Queue and Playback Manager for Matrix Radio Bot
-Provides an isolated queue, sequential worker loop, and LiveKit voice client per room.
+Queue Manager for Matrix Radio Bot
+Manages per-room playback queues, sequential song playback, and voice client lifecycle.
 """
 
 import asyncio
 import logging
 from typing import Dict, List, Optional
-from bot.livekit_voice import LiveKitVoiceClient
 from bot.song_resolver import SongResolver, ResolvedSong
+from bot.livekit_voice import LiveKitVoiceClient
 
 logger = logging.getLogger("radio.queue")
 
+IDLE_TIMEOUT_SECONDS = 60
+
 
 class RoomPlayer:
-    """Manages the music queue and playback worker for a single Matrix room."""
+    """Manages the music queue and playback worker for a specific Matrix room."""
 
     def __init__(self, room_id: str, homeserver_url: str, user_id: str, access_token: str,
                  jwt_service_url: str, sfu_url: str, send_message_callback,
                  proxy_url: Optional[str] = None):
         self.room_id = room_id
         self.send_message = send_message_callback
-        self.resolver = SongResolver(proxy_url=proxy_url)
 
+        self.resolver = SongResolver(proxy_url=proxy_url)
         self.voice_client = LiveKitVoiceClient(
             homeserver_url=homeserver_url,
             user_id=user_id,
@@ -33,8 +35,8 @@ class RoomPlayer:
 
         self._queue: List[ResolvedSong] = []
         self._current_song: Optional[ResolvedSong] = None
-        self._queue_lock = asyncio.Lock()
         self._worker_task: Optional[asyncio.Task] = None
+        self._queue_lock = asyncio.Lock()
         self._skip_event = asyncio.Event()
 
     @property
@@ -127,20 +129,28 @@ class RoomPlayer:
                         song = self._queue.pop(0)
 
                 if song is None:
-                    logger.info("[%s] Queue is empty. Waiting idle timeout...", self.room_id)
-                    await asyncio.sleep(5)
-                    async with self._queue_lock:
-                        if not self._queue:
-                            logger.info("[%s] Still empty after idle grace period. Leaving call.", self.room_id)
-                            await self.send_message(
-                                self.room_id,
-                                "⏹️ **پایان صف آهنگ‌ها.** خروج از تماس صوتی."
-                            )
-                            await self.voice_client.leave()
-                            self._current_song = None
-                            break
-                        else:
-                            continue
+                    logger.info("[%s] Queue is empty. Waiting idle grace period (%ds)...", self.room_id, IDLE_TIMEOUT_SECONDS)
+                    idle_waited = 0
+                    has_new_song = False
+                    while idle_waited < IDLE_TIMEOUT_SECONDS:
+                        await asyncio.sleep(2)
+                        idle_waited += 2
+                        async with self._queue_lock:
+                            if self._queue:
+                                has_new_song = True
+                                break
+
+                    if not has_new_song:
+                        logger.info("[%s] Still empty after %ds idle grace period. Leaving call.", self.room_id, IDLE_TIMEOUT_SECONDS)
+                        await self.send_message(
+                            self.room_id,
+                            f"⏹️ **پایان صف آهنگ‌ها.** خروج از تماس صوتی به دلیل عدم فعالیت ({IDLE_TIMEOUT_SECONDS} ثانیه)."
+                        )
+                        await self.voice_client.leave()
+                        self._current_song = None
+                        break
+                    else:
+                        continue
 
                 self._current_song = song
                 self._skip_event.clear()
@@ -175,22 +185,54 @@ class RoomPlayer:
                     f"🏷️ منبع: `{source_badge}` | 👤 درخواست: `{song.requested_by}`"
                 )
 
-                started = await self.voice_client.audio_streamer.play(song.target, is_direct=song.is_direct)
-                if not started:
-                    await self.send_message(
-                        self.room_id,
-                        f"❌ خطا در باز کردن استریم آهنگ: {song.title}"
-                    )
-                    continue
+                max_retries = 2
+                stream_ok = False
+                for attempt in range(1, max_retries + 1):
+                    started = await self.voice_client.audio_streamer.play(song.target, is_direct=song.is_direct)
+                    if not started:
+                        logger.warning(
+                            "[%s] Failed to start audio streamer on attempt %d/%d for %s",
+                            self.room_id, attempt, max_retries, song.title
+                        )
+                        if attempt < max_retries:
+                            await asyncio.sleep(1.5)
+                        continue
 
-                # Wait while playing
-                while self.voice_client.audio_streamer.is_playing:
-                    await asyncio.sleep(1)
+                    # Wait while playing
+                    while self.voice_client.audio_streamer.is_playing:
+                        await asyncio.sleep(1)
+                        if self._skip_event.is_set():
+                            logger.info("[%s] Track skipped.", self.room_id)
+                            break
+
                     if self._skip_event.is_set():
-                        logger.info("[%s] Track skipped.", self.room_id)
+                        stream_ok = True
                         break
 
-                logger.info("[%s] Finished playing track: %s", self.room_id, song.title)
+                    if self.voice_client.audio_streamer.last_stream_success:
+                        stream_ok = True
+                        break
+                    else:
+                        logger.warning(
+                            "[%s] Track %s aborted early on attempt %d/%d.",
+                            self.room_id, song.title, attempt, max_retries
+                        )
+                        if attempt < max_retries:
+                            await asyncio.sleep(2.0)
+
+                if not stream_ok and not self._skip_event.is_set():
+                    await self.send_message(
+                        self.room_id,
+                        f"⚠️ **خطا در پخش آهنگ:** متأسفانه امکان استریم «{song.title}» وجود نداشت. در حال عبور به آهنگ بعدی..."
+                    )
+
+                logger.info(
+                    "[%s] Finished processing track: %s (stream_ok=%s)",
+                    self.room_id, song.title, stream_ok
+                )
+
+                # Settle pause between consecutive tracks
+                await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
             logger.info("[%s] Playback worker task cancelled.", self.room_id)
