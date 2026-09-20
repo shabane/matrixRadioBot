@@ -1,0 +1,41 @@
+# Matrix Radio Voice Bot Configuration
+
+matrix:
+  # Matrix Homeserver URL (e.g. https://matrix.example.com)
+  homeserver_url: "https://matrix.example.com"
+  
+  # Matrix Bot User ID and Access Token
+  user_id: "@radio:example.com"
+  access_token: "syt_YOUR_MATRIX_ACCESS_TOKEN_HERE"
+  
+  # Bot display name / trigger mention
+  bot_name: "radio"
+  
+  # Automatically accept invites to rooms and direct messages
+  auto_join_invites: true
+
+livekit:
+  # LiveKit JWT exchange service (MatrixRTC)
+  jwt_service_url: "https://matrix.example.com/livekit/jwt/sfu/get"
+  
+  # LiveKit API Credentials (optional if using JWT service)
+  api_key: "YOUR_LIVEKIT_API_KEY"
+  api_secret: "YOUR_LIVEKIT_API_SECRET"
+  
+  # LiveKit SFU WebSocket URL
+  sfu_url: "wss://matrix.example.com/livekit/sfu"
+
+proxy:
+  # Optional SOCKS5 or HTTP proxy URL for YouTube/SoundCloud/Spotify extraction
+  # Can also be passed via RADIO_PROXY_URL or ALL_PROXY environment variable
+  # Example: "socks5://127.0.0.1:1080" or "http://127.0.0.1:8080"
+  url: ""
+
+audio:
+  # 48kHz is the standard WebRTC / Opus sample rate
+  sample_rate: 48000
+  channels: 1
+  frame_duration_ms: 20
+  
+  # Idle seconds before leaving call when queue is finished
+  idle_leave_timeout_sec: 15

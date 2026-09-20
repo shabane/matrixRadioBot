@@ -1,0 +1,25 @@
+# Environment & Virtual Environments
+venv/
+.venv/
+env/
+.env
+.deploy.env
+
+# Configuration files with real secrets
+config.yaml
+*.local.yaml
+*.local.sh
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Logs
+*.log
+
+# IDE & OS files
+.DS_Store
+.idea/
+.vscode/

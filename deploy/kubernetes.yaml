@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: matrix-radio-bot
+  labels:
+    app: matrix-radio-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: matrix-radio-bot
+  template:
+    metadata:
+      labels:
+        app: matrix-radio-bot
+    spec:
+      containers:
+        - name: radio-bot
+          image: python:3.13-slim
+          env:
+            # Optional: SOCKS5 or HTTP Proxy (e.g. socks5://proxy.example.com:1080)
+            - name: RADIO_PROXY_URL
+              value: ""
+          command:
+            - sh
+            - -c
+            - |
+              apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl
+              pip install --no-cache-dir --index-url https://pypi.org/simple -r /app/requirements.txt
+              python -m bot
+          workingDir: /app
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1.5"
+              memory: 768Mi
+          volumeMounts:
+            - name: bot-source
+              mountPath: /app/bot
+            - name: bot-config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+            - name: bot-reqs
+              mountPath: /app/requirements.txt
+              subPath: requirements.txt
+      volumes:
+        - name: bot-source
+          configMap:
+            name: radio-bot-code
+        - name: bot-config
+          configMap:
+            name: radio-bot-config
+        - name: bot-reqs
+          configMap:
+            name: radio-bot-config
