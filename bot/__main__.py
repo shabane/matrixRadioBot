@@ -7,12 +7,13 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 import yaml
 from pathlib import Path
 from urllib.parse import urlparse
 
 from bot.matrix_client import MatrixClient
-from bot.queue_manager import QueueManager
+from bot.queue_manager import QueueManager, IDLE_TIMEOUT_SECONDS
 from bot.command_handler import CommandHandler
 
 logging.basicConfig(
@@ -39,6 +40,7 @@ async def main():
     matrix_cfg = config.get("matrix", {})
     lk_cfg = config.get("livekit", {})
     proxy_cfg = config.get("proxy", {})
+    audio_cfg = config.get("audio", {})
 
     homeserver_url = matrix_cfg["homeserver_url"]
     user_id = matrix_cfg["user_id"]
@@ -73,6 +75,8 @@ async def main():
         auto_join_invites=auto_join
     )
 
+    idle_timeout_sec = audio_cfg.get("idle_leave_timeout_sec", IDLE_TIMEOUT_SECONDS)
+
     queue_manager = QueueManager(
         homeserver_url=homeserver_url,
         user_id=user_id,
@@ -80,14 +84,27 @@ async def main():
         jwt_service_url=jwt_service_url,
         sfu_url=sfu_url,
         send_message_callback=matrix_client.send_message,
-        proxy_url=proxy_url if proxy_url else None
+        proxy_url=proxy_url if proxy_url else None,
+        idle_timeout_sec=idle_timeout_sec
     )
+
+    safe_config = {
+        "homeserver_url": homeserver_url,
+        "bot_name": bot_name,
+        "auto_join_invites": auto_join,
+        "sfu_url": sfu_url,
+        "jwt_service_url": jwt_service_url,
+        "proxy_configured": bool(proxy_url),
+        "idle_leave_timeout_sec": idle_timeout_sec,
+    }
 
     command_handler = CommandHandler(
         bot_user_id=user_id,
         bot_name=bot_name,
         queue_manager=queue_manager,
-        send_message_callback=matrix_client.send_message
+        send_message_callback=matrix_client.send_message,
+        app_config=safe_config,
+        start_time=time.monotonic()
     )
 
     matrix_client.set_message_handler(command_handler.handle_message)
