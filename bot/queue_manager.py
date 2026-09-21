@@ -323,7 +323,10 @@ class RoomPlayer:
                     )
 
                 if stream_ok:
-                    self._history = _history_store.append(self.room_id, song)
+                    try:
+                        self._history = _history_store.append(self.room_id, song)
+                    except Exception as e:
+                        logger.error("[%s] Failed to persist playback history: %s", self.room_id, e)
 
                 if stream_ok and not track_was_skipped and self.loop_enabled:
                     async with self._queue_lock:

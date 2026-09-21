@@ -5,6 +5,7 @@ Each Matrix room gets its own subdirectory keyed by a filesystem-safe slug of it
 
 import json
 import logging
+import os
 import re
 from dataclasses import asdict
 from pathlib import Path
@@ -14,7 +15,11 @@ from bot.song_resolver import ResolvedSong
 
 logger = logging.getLogger("radio.storage")
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# Deliberately NOT derived from __file__: in the k3s deployment, bot/ is mounted from a
+# ConfigMap volume, which resolves through nested symlinks — Path(__file__).resolve() would
+# land inside that (read-only) mount instead of the writable working directory. Anchor on cwd
+# (or an explicit override) instead, since that's where the process actually has write access.
+DATA_DIR = Path(os.environ.get("RADIO_DATA_DIR", "data")).resolve()
 SAVED_QUEUES_DIR = DATA_DIR / "saved_queues"
 HISTORY_DIR = DATA_DIR / "history"
 
