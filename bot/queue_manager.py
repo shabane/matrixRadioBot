@@ -8,10 +8,15 @@ import logging
 from typing import Dict, List, Optional
 from bot.song_resolver import SongResolver, ResolvedSong
 from bot.livekit_voice import LiveKitVoiceClient
+from bot.audio_settings import AudioSettings
+from bot.storage import QueueStore, HistoryStore
 
 logger = logging.getLogger("radio.queue")
 
 IDLE_TIMEOUT_SECONDS = 60
+
+_queue_store = QueueStore()
+_history_store = HistoryStore()
 
 
 class RoomPlayer:
@@ -19,9 +24,10 @@ class RoomPlayer:
 
     def __init__(self, room_id: str, homeserver_url: str, user_id: str, access_token: str,
                  jwt_service_url: str, sfu_url: str, send_message_callback,
-                 proxy_url: Optional[str] = None):
+                 proxy_url: Optional[str] = None, idle_timeout_sec: int = IDLE_TIMEOUT_SECONDS):
         self.room_id = room_id
         self.send_message = send_message_callback
+        self.idle_timeout_sec = idle_timeout_sec
 
         self.resolver = SongResolver(proxy_url=proxy_url)
         self.voice_client = LiveKitVoiceClient(
@@ -38,6 +44,10 @@ class RoomPlayer:
         self._worker_task: Optional[asyncio.Task] = None
         self._queue_lock = asyncio.Lock()
         self._skip_event = asyncio.Event()
+
+        self.audio_settings = AudioSettings()
+        self.loop_enabled = False
+        self._history: List[ResolvedSong] = _history_store.load(room_id)
 
     @property
     def current_song(self) -> Optional[ResolvedSong]:
@@ -118,6 +128,88 @@ class RoomPlayer:
         self._worker_task = None
         logger.info("[%s] Room player stopped and left call.", self.room_id)
 
+    async def join_call(self) -> bool:
+        """Explicitly connects to the room's voice call without playing anything."""
+        if self.voice_client.is_connected:
+            return True
+        return await self.voice_client.join(self.room_id)
+
+    async def stop_playback(self):
+        """Clears the queue and stops the current track, but stays connected to the call."""
+        async with self._queue_lock:
+            self._queue.clear()
+
+        self._skip_event.set()
+
+        if self.voice_client.audio_streamer:
+            await self.voice_client.audio_streamer.stop()
+
+    def toggle_loop(self) -> bool:
+        """Toggles repeat-current-track mode. Returns the new state."""
+        self.loop_enabled = not self.loop_enabled
+        return self.loop_enabled
+
+    def get_history(self, limit: int = 10) -> List[ResolvedSong]:
+        """Returns the most recently played tracks, newest first."""
+        return list(reversed(self._history[-limit:]))
+
+    def set_volume(self, percent: int):
+        self.audio_settings.volume_percent = percent
+
+    def set_normalize(self, enabled: bool):
+        self.audio_settings.normalize = enabled
+
+    def set_fadein(self, ms: int):
+        self.audio_settings.fadein_ms = ms
+
+    async def save_queue(self, name: str, force: bool = False) -> bool:
+        """Saves the current track plus upcoming queue under a name."""
+        songs: List[ResolvedSong] = []
+        if self._current_song:
+            songs.append(self._current_song)
+        async with self._queue_lock:
+            songs.extend(self._queue)
+        return _queue_store.save(self.room_id, name, songs, force=force)
+
+    async def load_queue(self, name: str) -> Optional[int]:
+        """Loads a saved queue and appends it to the current queue. Returns song count, or None if not found."""
+        songs = _queue_store.load(self.room_id, name)
+        if songs is None:
+            return None
+
+        async with self._queue_lock:
+            self._queue.extend(songs)
+
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(self._worker_loop())
+
+        return len(songs)
+
+    def list_saved_queues(self) -> List[dict]:
+        return _queue_store.list(self.room_id)
+
+    def delete_saved_queue(self, name: str) -> bool:
+        return _queue_store.delete(self.room_id, name)
+
+    def rename_saved_queue(self, old_name: str, new_name: str) -> bool:
+        return _queue_store.rename(self.room_id, old_name, new_name)
+
+    def get_diag_info(self) -> dict:
+        streamer = self.voice_client.audio_streamer
+        return {
+            "room_id": self.room_id,
+            "connected": self.voice_client.is_connected,
+            "is_playing": self.is_playing,
+            "is_paused": self.is_paused,
+            "loop_enabled": self.loop_enabled,
+            "queue_length": len(self._queue),
+            "frames_streamed": streamer.frames_streamed if streamer else 0,
+            "last_stream_success": streamer.last_stream_success if streamer else None,
+            "current_target": streamer.current_target if streamer else None,
+            "proxy_configured": bool(self.resolver.proxy_url),
+            "idle_timeout_sec": self.idle_timeout_sec,
+        }
+
     async def _worker_loop(self):
         """Sequential queue processing worker for this specific room."""
         logger.info("[%s] Playback worker loop started.", self.room_id)
@@ -129,10 +221,10 @@ class RoomPlayer:
                         song = self._queue.pop(0)
 
                 if song is None:
-                    logger.info("[%s] Queue is empty. Waiting idle grace period (%ds)...", self.room_id, IDLE_TIMEOUT_SECONDS)
+                    logger.info("[%s] Queue is empty. Waiting idle grace period (%ds)...", self.room_id, self.idle_timeout_sec)
                     idle_waited = 0
                     has_new_song = False
-                    while idle_waited < IDLE_TIMEOUT_SECONDS:
+                    while idle_waited < self.idle_timeout_sec:
                         await asyncio.sleep(2)
                         idle_waited += 2
                         async with self._queue_lock:
@@ -141,10 +233,10 @@ class RoomPlayer:
                                 break
 
                     if not has_new_song:
-                        logger.info("[%s] Still empty after %ds idle grace period. Leaving call.", self.room_id, IDLE_TIMEOUT_SECONDS)
+                        logger.info("[%s] Still empty after %ds idle grace period. Leaving call.", self.room_id, self.idle_timeout_sec)
                         await self.send_message(
                             self.room_id,
-                            f"⏹️ **پایان صف آهنگ‌ها.** خروج از تماس صوتی به دلیل عدم فعالیت ({IDLE_TIMEOUT_SECONDS} ثانیه)."
+                            f"⏹️ **پایان صف آهنگ‌ها.** خروج از تماس صوتی به دلیل عدم فعالیت ({self.idle_timeout_sec} ثانیه)."
                         )
                         await self.voice_client.leave()
                         self._current_song = None
@@ -188,7 +280,9 @@ class RoomPlayer:
                 max_retries = 2
                 stream_ok = False
                 for attempt in range(1, max_retries + 1):
-                    started = await self.voice_client.audio_streamer.play(song.target, is_direct=song.is_direct)
+                    started = await self.voice_client.audio_streamer.play(
+                        song.target, is_direct=song.is_direct, audio_settings=self.audio_settings
+                    )
                     if not started:
                         logger.warning(
                             "[%s] Failed to start audio streamer on attempt %d/%d for %s",
@@ -220,11 +314,20 @@ class RoomPlayer:
                         if attempt < max_retries:
                             await asyncio.sleep(2.0)
 
-                if not stream_ok and not self._skip_event.is_set():
+                track_was_skipped = self._skip_event.is_set()
+
+                if not stream_ok and not track_was_skipped:
                     await self.send_message(
                         self.room_id,
                         f"⚠️ **خطا در پخش آهنگ:** متأسفانه امکان استریم «{song.title}» وجود نداشت. در حال عبور به آهنگ بعدی..."
                     )
+
+                if stream_ok:
+                    self._history = _history_store.append(self.room_id, song)
+
+                if stream_ok and not track_was_skipped and self.loop_enabled:
+                    async with self._queue_lock:
+                        self._queue.insert(0, song)
 
                 logger.info(
                     "[%s] Finished processing track: %s (stream_ok=%s)",
@@ -248,7 +351,7 @@ class QueueManager:
 
     def __init__(self, homeserver_url: str, user_id: str, access_token: str,
                  jwt_service_url: str, sfu_url: str, send_message_callback,
-                 proxy_url: Optional[str] = None):
+                 proxy_url: Optional[str] = None, idle_timeout_sec: int = IDLE_TIMEOUT_SECONDS):
         self.homeserver_url = homeserver_url
         self.user_id = user_id
         self.access_token = access_token
@@ -256,6 +359,7 @@ class QueueManager:
         self.sfu_url = sfu_url
         self.send_message = send_message_callback
         self.proxy_url = proxy_url
+        self.idle_timeout_sec = idle_timeout_sec
 
         self._players: Dict[str, RoomPlayer] = {}
         self._lock = asyncio.Lock()
@@ -272,7 +376,8 @@ class QueueManager:
                     jwt_service_url=self.jwt_service_url,
                     sfu_url=self.sfu_url,
                     send_message_callback=self.send_message,
-                    proxy_url=self.proxy_url
+                    proxy_url=self.proxy_url,
+                    idle_timeout_sec=self.idle_timeout_sec
                 )
             return self._players[room_id]
 
@@ -282,3 +387,15 @@ class QueueManager:
             for player in self._players.values():
                 await player.leave()
             self._players.clear()
+
+    def get_status(self) -> dict:
+        """Returns a snapshot of bot-wide playback status across all rooms."""
+        active_rooms = list(self._players.values())
+        connected_rooms = sum(1 for p in active_rooms if p.voice_client.is_connected)
+        playing_rooms = sum(1 for p in active_rooms if p.is_playing)
+        return {
+            "total_rooms": len(active_rooms),
+            "connected_rooms": connected_rooms,
+            "playing_rooms": playing_rooms,
+            "proxy_configured": bool(self.proxy_url),
+        }
