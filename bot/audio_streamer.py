@@ -9,6 +9,8 @@ import logging
 from typing import Optional, List
 import livekit.rtc as rtc
 
+from bot.audio_settings import AudioSettings
+
 logger = logging.getLogger("radio.audio")
 
 SAMPLE_RATE = 48000
@@ -62,9 +64,11 @@ class AudioStreamer:
         except (asyncio.CancelledError, Exception):
             pass
 
-    async def play(self, target: str, is_direct: bool = False) -> bool:
+    async def play(self, target: str, is_direct: bool = False, audio_settings: Optional[AudioSettings] = None) -> bool:
         """Starts streaming audio to LiveKit AudioSource."""
         await self.stop()
+
+        af_args = audio_settings.build_af_args() if audio_settings else []
 
         self.current_target = target
         self.frames_streamed = 0
@@ -86,6 +90,7 @@ class AudioStreamer:
                     "-re",
                     "-i", target,
                     "-vn",
+                    *af_args,
                     "-f", "s16le",
                     "-ar", str(SAMPLE_RATE),
                     "-ac", str(NUM_CHANNELS),
@@ -124,6 +129,7 @@ class AudioStreamer:
                     "-re",
                     "-i", "pipe:0",
                     "-vn",
+                    *af_args,
                     "-f", "s16le",
                     "-ar", str(SAMPLE_RATE),
                     "-ac", str(NUM_CHANNELS),
