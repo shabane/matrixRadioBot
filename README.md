@@ -62,6 +62,55 @@ Powered by **LiveKit WebRTC**, **yt-dlp**, and **FFmpeg**, it supports real-time
 
 ---
 
+## ⚡ Bang (`!`) Commands
+
+In addition to the `@radio` mention convention above, the bot supports a second, terser
+command style prefixed with `!`. These work in **any** room, group or PV, **without** needing
+to mention the bot.
+
+### Playback
+
+| Command | Alias | Description |
+| :--- | :--- | :--- |
+| `!help` | `!h` | Show this help |
+| `!join` | `!j` | Join Element Call in this room |
+| `!leave` | `!lv` | Leave current Element Call |
+| `!play <url-or-query>` | `!p` | Add track and auto-join call if needed |
+| `!queue` | `!q` | Show queue with ETA |
+| `!nowplaying` | `!np` | Show current track |
+| `!skip` | `!s` | Skip current track |
+| `!stop` | `!x` | Stop playback and clear queue (stays connected to the call) |
+| `!loop` | `!lp` | Toggle loop mode (repeats the current track) |
+| `!history` | `!hist` | Show recent playback history |
+
+### Saved Queues
+
+| Command | Alias | Description |
+| :--- | :--- | :--- |
+| `!save <name> [--force]` | `!sv` | Save current+upcoming queue |
+| `!load <name>` | `!ld` | Load a saved queue |
+| `!queues` | `!qs` | List saved queues |
+| `!deletequeue <name>` | `!dq` | Delete a saved queue |
+| `!renamequeue <old> <new>` | `!rq` | Rename a saved queue |
+
+### Audio & Info
+
+| Command | Alias | Description |
+| :--- | :--- | :--- |
+| `!audio` | `!a` | Show current audio settings |
+| `!normalize on\|off` | `!norm` | Toggle normalization (FFmpeg `loudnorm`) |
+| `!fadein <ms>` | `!fi` | Set fade-in (0-5000ms) |
+| `!volume <0-200>` | `!v` | Set playback volume percent |
+| `!status` | `!st` | Show bot status |
+| `!diag` | `!d` | Show diagnostics |
+| `!config` | `!cfg` | Show active config |
+| `!defaults` | `!df` | Show default config values |
+
+Saved queues and playback history persist to JSON files under a gitignored `data/` directory,
+namespaced per room.
+
+---
+
 ## ⚙️ Configuration
 
 Copy the example configuration file and adjust it with your Matrix and LiveKit details:
