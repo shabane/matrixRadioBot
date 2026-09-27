@@ -58,6 +58,7 @@ Powered by **LiveKit WebRTC**, **yt-dlp**, and **FFmpeg**, it supports real-time
 | `@radio skip` | Skip the currently playing track and start the next one |
 | `@radio queue` | View the list of tracks in the room's playback queue |
 | `@radio np` | Display information about the currently playing track (title, duration, source) |
+| `@radio stop` | Stop playback and clear the queue, but stay connected to the call |
 | `@radio leave` | Clear the queue and immediately disconnect from the voice call |
 | `@radio help` | Show available commands and usage guide |
 

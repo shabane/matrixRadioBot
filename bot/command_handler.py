@@ -158,10 +158,16 @@ class CommandHandler:
                 await self.send_message(room_id, "⚠️ هیچ آهنگی در حال پخش نیست.")
             return
 
-        # 4. Leave / Stop
-        if cmd_lower in ("leave", "stop", "قطع", "خروج"):
+        # 4. Leave
+        if cmd_lower in ("leave", "قطع", "خروج"):
             await player.leave()
             await self.send_message(room_id, "👋 **صف پاک شد و بات از تماس خارج شد.**")
+            return
+
+        # 4b. Stop (halts playback and clears the queue, but stays connected to the call)
+        if cmd_lower in ("stop",):
+            await player.stop_playback()
+            await self.send_message(room_id, "⏹️ **پخش متوقف شد و صف پاک شد.** (بات همچنان در تماس باقی می‌ماند)")
             return
 
         # 5. Queue / List
