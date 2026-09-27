@@ -14,6 +14,7 @@ from bot.storage import QueueStore, HistoryStore, LiveStateStore
 logger = logging.getLogger("radio.queue")
 
 IDLE_TIMEOUT_SECONDS = 60
+PLAYLIST_RESOLVE_CONCURRENCY = 4
 
 _queue_store = QueueStore()
 _history_store = HistoryStore()
@@ -119,11 +120,22 @@ class RoomPlayer:
         return len(queries)
 
     async def _enqueue_playlist(self, queries: List[str], requested_by: str):
-        """Resolves and enqueues playlist tracks one at a time, starting playback as soon as possible."""
+        """Resolves playlist tracks with bounded concurrency and enqueues them in original order,
+        starting playback as soon as the first one is ready. Resolving strictly one-at-a-time was
+        too slow for longer playlists — each track needs its own yt-dlp network round trip, so
+        !queue would look like it only had one song in it for a long time after !play."""
+        semaphore = asyncio.Semaphore(PLAYLIST_RESOLVE_CONCURRENCY)
+
+        async def resolve_one(query: str) -> Optional[ResolvedSong]:
+            async with semaphore:
+                return await self.resolver.resolve(query, requested_by)
+
+        tasks = [asyncio.create_task(resolve_one(q)) for q in queries]
+
         added = 0
         failed = 0
-        for query in queries:
-            song = await self.resolver.resolve(query, requested_by)
+        for task in tasks:
+            song = await task
             if not song:
                 failed += 1
                 continue
