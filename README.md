@@ -83,7 +83,7 @@ to mention the bot.
 | `!skip` | `!s` | Skip current track |
 | `!stop` | `!x` | Stop playback exactly where it is (queue and loop are kept, stays connected) |
 | `!resume` | `!rs` | Resume playback from where it stopped |
-| `!loop` | `!lp` | Toggle loop mode (repeats the current track) |
+| `!loop` | `!lp` | Toggle loop mode (repeats the current track; auto-disables if that track is skipped) |
 | `!progress` | `!pr` | Show an ASCII progress bar for the current track |
 | `!history` | `!hist` | Show recent playback history |
 

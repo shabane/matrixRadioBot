@@ -60,7 +60,7 @@ BANG_HELP_TEXT = (
     "`!skip` (`!s`) - skip current track\n"
     "`!stop` (`!x`) - stop playback where it is (queue/loop kept, stays connected)\n"
     "`!resume` (`!rs`) - resume playback from where it stopped\n"
-    "`!loop` (`!lp`) - toggle loop mode\n"
+    "`!loop` (`!lp`) - toggle loop mode (auto-disables if the looped track is skipped)\n"
     "`!progress` (`!pr`) - show an ASCII progress bar for the current track\n"
     "`!history` (`!hist`) - show recent playback history\n\n"
     "**Saved Queues**\n"

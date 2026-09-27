@@ -166,6 +166,7 @@ class RoomPlayer:
 
         self._current_song = None
         self._worker_task = None
+        self.loop_enabled = False
         logger.info("[%s] Room player stopped and left call.", self.room_id)
 
     async def join_call(self) -> bool:
@@ -345,6 +346,12 @@ class RoomPlayer:
                             await asyncio.sleep(2.0)
 
                 track_was_skipped = self._skip_event.is_set()
+
+                if track_was_skipped and self.loop_enabled:
+                    self.loop_enabled = False
+                    await self.send_message(
+                        self.room_id, "🔁 **حالت لوپ به دلیل رد کردن آهنگ خاموش شد.**"
+                    )
 
                 if not stream_ok and not track_was_skipped:
                     await self.send_message(
