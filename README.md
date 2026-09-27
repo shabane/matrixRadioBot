@@ -23,6 +23,7 @@ Powered by **LiveKit WebRTC**, **yt-dlp**, and **FFmpeg**, it supports real-time
   - 🟠 **SoundCloud:** Full support for SoundCloud tracks and playlists.
   - 🔍 **Text Search:** Search by song title or artist without needing a link (`@radio play Bohemian Rhapsody`).
   - 📁 **Direct Audio Streams:** Supports raw audio formats (`.mp3`, `.opus`, `.ogg`, `.flac`, `.wav`, `.aac`, `.m3u8`).
+  - 📃 **Playlists:** `!play`/`@radio play` also accepts YouTube playlist links, Spotify playlists/albums, and SoundCloud sets — tracks are resolved and queued in the background as soon as they're found, so playback starts without waiting for the whole playlist.
 
 - ⚡ **Zero-Disk Streaming Pipeline:**
   - Streams audio on-the-fly by piping `yt-dlp` output directly into `FFmpeg` without storing large files on disk.
@@ -75,7 +76,7 @@ to mention the bot.
 | `!help` | `!h` | Show this help |
 | `!join` | `!j` | Join Element Call in this room |
 | `!leave` | `!lv` | Leave current Element Call |
-| `!play <url-or-query>` | `!p` | Add track and auto-join call if needed |
+| `!play <url-or-query>` | `!p` | Add track/playlist (YouTube, Spotify, SoundCloud) and auto-join call if needed |
 | `!queue` | `!q` | Show queue with ETA |
 | `!nowplaying` | `!np` | Show current track |
 | `!skip` | `!s` | Skip current track |

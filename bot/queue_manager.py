@@ -86,6 +86,46 @@ class RoomPlayer:
 
         return song
 
+    async def add_playlist(self, url: str, requested_by: str) -> Optional[int]:
+        """Lists a playlist URL's tracks and enqueues them progressively in the background.
+
+        Returns the number of tracks found (not yet all resolved), or None if the
+        playlist could not be read at all.
+        """
+        queries = await self.resolver.resolve_playlist(url)
+        if not queries:
+            return None
+
+        asyncio.create_task(self._enqueue_playlist(queries, requested_by))
+        return len(queries)
+
+    async def _enqueue_playlist(self, queries: List[str], requested_by: str):
+        """Resolves and enqueues playlist tracks one at a time, starting playback as soon as possible."""
+        added = 0
+        failed = 0
+        for query in queries:
+            song = await self.resolver.resolve(query, requested_by)
+            if not song:
+                failed += 1
+                continue
+
+            async with self._queue_lock:
+                self._queue.append(song)
+            added += 1
+
+            if self._worker_task is None or self._worker_task.done():
+                self._worker_task = asyncio.create_task(self._worker_loop())
+
+        logger.info("[%s] Playlist enqueue finished: %d added, %d failed", self.room_id, added, failed)
+        if added and not failed:
+            await self.send_message(self.room_id, f"✅ Finished adding playlist: {added} track(s) queued.")
+        elif added and failed:
+            await self.send_message(
+                self.room_id, f"✅ Finished adding playlist: {added} track(s) queued, {failed} failed."
+            )
+        elif failed:
+            await self.send_message(self.room_id, "❌ Failed to add any tracks from that playlist.")
+
     async def pause(self) -> bool:
         if self.voice_client.audio_streamer and self.voice_client.audio_streamer.is_playing:
             await self.voice_client.audio_streamer.pause()

@@ -53,7 +53,7 @@ BANG_HELP_TEXT = (
     "`!help` (`!h`) - show this help\n"
     "`!join` (`!j`) - join Element Call in this room\n"
     "`!leave` (`!lv`) - leave current Element Call\n"
-    "`!play` (`!p`) `<url-or-query>` - add track and auto-join call if needed\n"
+    "`!play` (`!p`) `<url-or-query>` - add track/playlist (YouTube, Spotify, SoundCloud) and auto-join call if needed\n"
     "`!queue` (`!q`) - show queue with ETA\n"
     "`!nowplaying` (`!np`) - show current track\n"
     "`!skip` (`!s`) - skip current track\n"
@@ -225,6 +225,15 @@ class CommandHandler:
                 break
 
         if query:
+            if player.resolver.is_playlist_url(query):
+                await self.send_message(room_id, f"📃 پلی‌لیست شناسایی شد، در حال خواندن آهنگ‌ها: `{query}`...")
+                count = await player.add_playlist(query, requested_by=sender)
+                if count:
+                    await self.send_message(room_id, f"➕ {count} آهنگ در پلی‌لیست پیدا شد. در حال افزودن به صف...")
+                else:
+                    await self.send_message(room_id, "❌ خواندن این پلی‌لیست ممکن نشد.")
+                return
+
             await self.send_message(room_id, f"🔍 در حال جستجو و دریافت اطلاعات آهنگ: `{query}`...")
             song = await player.add_query(query, requested_by=sender)
             if song:
@@ -297,8 +306,20 @@ class CommandHandler:
             await self.send_message(room_id, "⚠️ Usage: `!play <url-or-query>`")
             return
 
-        await self.send_message(room_id, f"🔍 Searching: `{query}`...")
         player = await self.queue_manager.get_player(room_id)
+
+        if player.resolver.is_playlist_url(query):
+            await self.send_message(room_id, f"📃 Playlist detected, reading tracks: `{query}`...")
+            count = await player.add_playlist(query, requested_by=sender)
+            if count:
+                await self.send_message(
+                    room_id, f"➕ Found {count} track(s) in the playlist. Adding them to the queue..."
+                )
+            else:
+                await self.send_message(room_id, "❌ Could not read that playlist.")
+            return
+
+        await self.send_message(room_id, f"🔍 Searching: `{query}`...")
         song = await player.add_query(query, requested_by=sender)
         if song:
             queue_len = len(player.get_queue())

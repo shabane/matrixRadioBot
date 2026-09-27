@@ -10,14 +10,15 @@ import json
 import re
 import urllib.request
 from dataclasses import dataclass
-from typing import Optional
-from urllib.parse import urlparse
+from typing import List, Optional
+from urllib.parse import urlparse, parse_qs
 
 import yt_dlp
 
 logger = logging.getLogger("radio.resolver")
 
 DIRECT_AUDIO_EXTENSIONS = (".mp3", ".opus", ".ogg", ".flac", ".wav", ".aac", ".m4a", ".m3u8")
+PLAYLIST_ENTRY_LIMIT = 50
 
 
 @dataclass
@@ -74,6 +75,109 @@ class SongResolver:
         except Exception as e:
             logger.warning("Failed to extract Spotify metadata: %s", e)
             return None
+
+    def is_playlist_url(self, query: str) -> bool:
+        """Cheap, network-free check for whether a URL points at a playlist/album/set."""
+        query = query.strip()
+        parsed = urlparse(query)
+        if not (parsed.scheme and parsed.netloc):
+            return False
+
+        netloc = parsed.netloc.lower()
+        path = parsed.path.lower()
+
+        if "open.spotify.com" in netloc:
+            return path.startswith("/playlist/") or path.startswith("/album/")
+
+        if "soundcloud.com" in netloc:
+            return "/sets/" in path
+
+        if "youtube.com" in netloc or "youtu.be" in netloc:
+            qs = parse_qs(parsed.query)
+            # A bare playlist link (?list=...). A watch link that also carries a
+            # `list=` param (e.g. autoplay context) is treated as a single video.
+            return path.rstrip("/") == "/playlist" and "list" in qs
+
+        return False
+
+    def _resolve_spotify_playlist_queries(self, url: str) -> Optional[List[str]]:
+        """Scrapes the Spotify embed page for a playlist/album's track list (no API key needed)."""
+        m = re.search(r"open\.spotify\.com/(playlist|album)/([A-Za-z0-9]+)", url)
+        if not m:
+            return None
+
+        kind, spotify_id = m.group(1), m.group(2)
+        embed_url = f"https://open.spotify.com/embed/{kind}/{spotify_id}"
+        try:
+            req = urllib.request.Request(embed_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+
+            m2 = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+            if not m2:
+                return None
+
+            data = json.loads(m2.group(1))
+            entity = data["props"]["pageProps"]["state"]["data"]["entity"]
+            track_list = entity.get("trackList") or []
+
+            queries: List[str] = []
+            for track in track_list[:PLAYLIST_ENTRY_LIMIT]:
+                title = re.sub(r"\s+", " ", (track.get("title") or "")).strip()
+                artist = re.sub(r"\s+", " ", (track.get("subtitle") or "")).strip()
+                if title and artist:
+                    queries.append(f"{artist} - {title}")
+                elif title:
+                    queries.append(title)
+
+            return queries or None
+        except Exception as e:
+            logger.warning("Failed to extract Spotify playlist tracks: %s", e)
+            return None
+
+    def _extract_flat_playlist_queries(self, url: str) -> Optional[List[str]]:
+        """Lists a YouTube playlist or SoundCloud set's tracks without fully resolving each one."""
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "extract_flat": True,
+            "playlistend": PLAYLIST_ENTRY_LIMIT,
+        }
+        if self.proxy_url:
+            ydl_opts["proxy"] = self.proxy_url
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if not info:
+                return None
+
+            entries = info.get("entries") or []
+            queries: List[str] = []
+            for entry in entries:
+                if not entry:
+                    continue
+                entry_url = entry.get("url")
+                if entry_url and entry_url.startswith("http"):
+                    queries.append(entry_url)
+                elif entry.get("id"):
+                    queries.append(f"https://www.youtube.com/watch?v={entry['id']}")
+
+            return queries[:PLAYLIST_ENTRY_LIMIT] or None
+        except Exception as e:
+            logger.error("Error extracting playlist entries for '%s': %s", url, e)
+            return None
+
+    def _resolve_playlist_queries_sync(self, url: str) -> Optional[List[str]]:
+        parsed = urlparse(url)
+        if "open.spotify.com" in parsed.netloc.lower():
+            return self._resolve_spotify_playlist_queries(url)
+        return self._extract_flat_playlist_queries(url)
+
+    async def resolve_playlist(self, url: str) -> Optional[List[str]]:
+        """Asynchronously lists a playlist's tracks as individual resolvable queries/URLs."""
+        return await asyncio.to_thread(self._resolve_playlist_queries_sync, url)
 
     def _extract_sync(self, query: str, requested_by: str) -> Optional[ResolvedSong]:
         query = query.strip()
