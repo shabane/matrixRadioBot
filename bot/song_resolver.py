@@ -40,7 +40,7 @@ class SongResolver:
 
     def _format_duration(self, seconds: Optional[float]) -> str:
         if not seconds:
-            return "پخش زنده / نامشخص"
+            return "Live / Unknown"
         secs = int(seconds)
         mins, s = divmod(secs, 60)
         hrs, mins = divmod(mins, 60)
@@ -193,7 +193,7 @@ class SongResolver:
                 webpage_url=query,
                 uploader="Direct Audio",
                 duration=0,
-                duration_str="پخش زنده / مستقیم",
+                duration_str="Live / Direct",
                 source_type="direct",
                 requested_by=requested_by,
                 is_direct=True

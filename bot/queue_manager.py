@@ -267,7 +267,7 @@ class RoomPlayer:
                         logger.info("[%s] Still empty after %ds idle grace period. Leaving call.", self.room_id, self.idle_timeout_sec)
                         await self.send_message(
                             self.room_id,
-                            f"⏹️ **پایان صف آهنگ‌ها.** خروج از تماس صوتی به دلیل عدم فعالیت ({self.idle_timeout_sec} ثانیه)."
+                            f"⏹️ **Queue finished.** Leaving the voice call due to inactivity ({self.idle_timeout_sec}s)."
                         )
                         await self.voice_client.leave()
                         self._current_song = None
@@ -282,13 +282,13 @@ class RoomPlayer:
                 if not self.voice_client.is_connected:
                     await self.send_message(
                         self.room_id,
-                        f"📻 در حال اتصال به تماس صوتی برای پخش: **{song.title}**..."
+                        f"📻 Connecting to the voice call to play: **{song.title}**..."
                     )
                     connected = await self.voice_client.join(self.room_id)
                     if not connected:
                         await self.send_message(
                             self.room_id,
-                            "❌ **خطا در اتصال به تماس صوتی.** لطفاً مطمئن شوید کال در این روم آغاز شده است."
+                            "❌ **Failed to connect to the voice call.** Make sure a call has been started in this room."
                         )
                         continue
 
@@ -302,10 +302,10 @@ class RoomPlayer:
 
                 await self.send_message(
                     self.room_id,
-                    f"🎶 **هم‌اکنون در حال پخش:**\n"
+                    f"🎶 **Now Playing:**\n"
                     f"> 🎵 **[{song.title}]({song.webpage_url})**\n"
-                    f"⏱️ زمان: `{song.duration_str}` | 👤 خواننده: `{song.uploader}`\n"
-                    f"🏷️ منبع: `{source_badge}` | 👤 درخواست: `{song.requested_by}`"
+                    f"⏱️ Duration: `{song.duration_str}` | 👤 Uploader: `{song.uploader}`\n"
+                    f"🏷️ Source: `{source_badge}` | 👤 Requested by: `{song.requested_by}`"
                 )
 
                 max_retries = 2
@@ -350,13 +350,13 @@ class RoomPlayer:
                 if track_was_skipped and self.loop_enabled:
                     self.loop_enabled = False
                     await self.send_message(
-                        self.room_id, "🔁 **حالت لوپ به دلیل رد کردن آهنگ خاموش شد.**"
+                        self.room_id, "🔁 **Loop mode disabled because the track was skipped.**"
                     )
 
                 if not stream_ok and not track_was_skipped:
                     await self.send_message(
                         self.room_id,
-                        f"⚠️ **خطا در پخش آهنگ:** متأسفانه امکان استریم «{song.title}» وجود نداشت. در حال عبور به آهنگ بعدی..."
+                        f"⚠️ **Playback error:** couldn't stream «{song.title}». Moving to the next track..."
                     )
 
                 if stream_ok:

@@ -149,7 +149,7 @@ class MatrixClient:
                     self._joined_rooms.add(room_id)
                     await self.send_message(
                         room_id,
-                        "📻 **سلام! ربات رادیو با موفقیت اضافه شد.**\nبرای پخش موزیک در کال صوتی کافیست لینک را بفرستید: `@radio <لینک>`\nبرای راهنما: `@radio help`"
+                        "📻 **Hi! The radio bot has been added successfully.**\nTo play music in the voice call, just send a link: `@radio <link>`\nFor help: `@radio help`"
                     )
                 else:
                     text = await resp.text()
