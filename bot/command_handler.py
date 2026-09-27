@@ -134,123 +134,123 @@ class CommandHandler:
         player = await self.queue_manager.get_player(room_id)
 
         # 1. Pause / Stop (halts in place, keeps queue/loop, stays connected)
-        if cmd_lower in ("pause", "stop", "پاز", "توقف"):
+        if cmd_lower in ("pause", "stop"):
             paused = await player.pause()
             if paused:
-                await self.send_message(room_id, "⏸️ **پخش موسیقی متوقف شد.** (برای ادامه `@radio resume`)")
+                await self.send_message(room_id, "⏸️ **Playback stopped.** (Use `@radio resume` to continue)")
             else:
-                await self.send_message(room_id, "⚠️ هیچ آهنگی در حال پخش نیست.")
+                await self.send_message(room_id, "⚠️ Nothing is playing right now.")
             return
 
         # 2. Resume
-        if cmd_lower in ("resume", "ادامه", "پخش"):
+        if cmd_lower in ("resume",):
             resumed = await player.resume()
             if resumed:
-                await self.send_message(room_id, "▶️ **پخش موسیقی ادامه یافت.**")
+                await self.send_message(room_id, "▶️ **Playback resumed.**")
             else:
-                await self.send_message(room_id, "⚠️ آهنگ در حالت توقف نیست.")
+                await self.send_message(room_id, "⚠️ Nothing is paused.")
             return
 
         # 3. Skip / Next
-        if cmd_lower in ("skip", "next", "بعدی", "رد"):
+        if cmd_lower in ("skip", "next"):
             skipped = await player.skip()
             if skipped:
-                await self.send_message(room_id, "⏭️ **آهنگ جاری رد شد.** رفتن به آهنگ بعدی...")
+                await self.send_message(room_id, "⏭️ **Skipped the current track.** Moving to the next one...")
             else:
-                await self.send_message(room_id, "⚠️ هیچ آهنگی در حال پخش نیست.")
+                await self.send_message(room_id, "⚠️ Nothing is playing right now.")
             return
 
         # 4. Leave
-        if cmd_lower in ("leave", "قطع", "خروج"):
+        if cmd_lower in ("leave",):
             await player.leave()
-            await self.send_message(room_id, "👋 **صف پاک شد و بات از تماس خارج شد.**")
+            await self.send_message(room_id, "👋 **Queue cleared and left the call.**")
             return
 
         # 5. Queue / List
-        if cmd_lower in ("queue", "list", "صف", "لیست"):
+        if cmd_lower in ("queue", "list"):
             queue = player.get_queue()
             curr = player.current_song
             if not curr and not queue:
-                await self.send_message(room_id, "📭 **صف پخش این چت خالی است.**")
+                await self.send_message(room_id, "📭 **The queue for this chat is empty.**")
                 return
 
-            msg_lines = ["📋 **لیست صف پخش:**"]
+            msg_lines = ["📋 **Playback Queue:**"]
             if curr:
-                status = "⏸️ [متوقف]" if player.is_paused else "▶️ [در حال پخش]"
-                msg_lines.append(f"**هم‌اکنون:** {status} `[{curr.title}]({curr.webpage_url})` (مدت: `{curr.duration_str}`)")
+                status = "⏸️ [paused]" if player.is_paused else "▶️ [playing]"
+                msg_lines.append(f"**Now:** {status} `[{curr.title}]({curr.webpage_url})` (duration: `{curr.duration_str}`)")
             if queue:
-                msg_lines.append("\n**در صف انتظار:**")
+                msg_lines.append("\n**Up next:**")
                 for i, s in enumerate(queue, 1):
-                    msg_lines.append(f"{i}. `[{s.title}]({s.webpage_url})` (مدت: `{s.duration_str}`) | درخواست: `{s.requested_by}`")
+                    msg_lines.append(f"{i}. `[{s.title}]({s.webpage_url})` (duration: `{s.duration_str}`) | requested by: `{s.requested_by}`")
             await self.send_message(room_id, "\n".join(msg_lines))
             return
 
         # 6. Now Playing (np)
-        if cmd_lower in ("np", "now", "اهنگ", "آهنگ"):
+        if cmd_lower in ("np", "now"):
             curr = player.current_song
             if curr:
-                status = "⏸️ متوقف" if player.is_paused else "▶️ در حال پخش"
+                status = "⏸️ paused" if player.is_paused else "▶️ playing"
                 await self.send_message(
                     room_id,
-                    f"🎵 **آهنگ در حال پخش:**\n"
+                    f"🎵 **Now Playing:**\n"
                     f"> **[{curr.title}]({curr.webpage_url})**\n"
-                    f"⏱️ زمان: `{curr.duration_str}` | خواننده: `{curr.uploader}`\n"
-                    f"وضعیت: {status}\n👤 درخواست از: `{curr.requested_by}`"
+                    f"⏱️ Duration: `{curr.duration_str}` | Uploader: `{curr.uploader}`\n"
+                    f"Status: {status}\n👤 Requested by: `{curr.requested_by}`"
                 )
             else:
-                await self.send_message(room_id, "💤 هم‌اکنون هیچ آهنگی در حال پخش نیست.")
+                await self.send_message(room_id, "💤 Nothing is playing right now.")
             return
 
         # 7. Help
-        if cmd_lower in ("help", "راهنما", "?", "دستورات"):
+        if cmd_lower in ("help", "?"):
             help_text = (
-                "📻 **راهنمای ربات رادیو و پخش موزیک (پشتیبانی از YouTube, Spotify, SoundCloud):**\n\n"
-                "• `@radio <لینک>` : پخش از یوتیوب، ساندکلاد، اسپاتیفای یا لینک مستقیم\n"
-                "• `@radio play <نام آهنگ>` : جستجو و پخش آهنگ در یوتیوب\n"
-                "• `@radio pause` : توقف موقت پخش\n"
-                "• `@radio resume` : ادامه پخش\n"
-                "• `@radio skip` : رد کردن آهنگ جاری\n"
-                "• `@radio queue` : مشاهده صف آهنگ‌ها\n"
-                "• `@radio np` : مشاهده اطلاعات آهنگ جاری\n"
-                "• `@radio leave` : قطع تماس و پاک کردن صف\n\n"
-                "💡 *نکته: در چت خصوصی (PV) نیازی به منشن کردن `@radio` نیست.*"
+                "📻 **Radio & Music Bot Help (supports YouTube, Spotify, SoundCloud):**\n\n"
+                "• `@radio <link>` : play from YouTube, SoundCloud, Spotify, or a direct link\n"
+                "• `@radio play <song name>` : search and play a song from YouTube\n"
+                "• `@radio pause` : pause playback\n"
+                "• `@radio resume` : resume playback\n"
+                "• `@radio skip` : skip the current track\n"
+                "• `@radio queue` : view the track queue\n"
+                "• `@radio np` : view info about the current track\n"
+                "• `@radio leave` : leave the call and clear the queue\n\n"
+                "💡 *Tip: in a direct message (PV), you don't need to mention `@radio`.*"
             )
             await self.send_message(room_id, help_text)
             return
 
         # 8. Song Playback (URL or Search Query)
         query = cmd
-        # Remove play / پخش prefix if present
-        for prefix in ("play ", "پخش ", "search ", "سرچ "):
+        # Remove "play"/"search" prefix if present
+        for prefix in ("play ", "search "):
             if query.lower().startswith(prefix):
                 query = query[len(prefix):].strip()
                 break
 
         if query:
             if player.resolver.is_playlist_url(query):
-                await self.send_message(room_id, f"📃 پلی‌لیست شناسایی شد، در حال خواندن آهنگ‌ها: `{query}`...")
+                await self.send_message(room_id, f"📃 Playlist detected, reading tracks: `{query}`...")
                 count = await player.add_playlist(query, requested_by=sender)
                 if count:
-                    await self.send_message(room_id, f"➕ {count} آهنگ در پلی‌لیست پیدا شد. در حال افزودن به صف...")
+                    await self.send_message(room_id, f"➕ Found {count} track(s) in the playlist. Adding them to the queue...")
                 else:
-                    await self.send_message(room_id, "❌ خواندن این پلی‌لیست ممکن نشد.")
+                    await self.send_message(room_id, "❌ Could not read that playlist.")
                 return
 
-            await self.send_message(room_id, f"🔍 در حال جستجو و دریافت اطلاعات آهنگ: `{query}`...")
+            await self.send_message(room_id, f"🔍 Searching for track info: `{query}`...")
             song = await player.add_query(query, requested_by=sender)
             if song:
                 queue_len = len(player.get_queue())
                 if queue_len > 0 and (player.is_playing or player.current_song != song):
                     await self.send_message(
                         room_id,
-                        f"➕ **آهنگ به صف اضافه شد** (موقعیت #{queue_len} در صف):\n"
+                        f"➕ **Added to queue** (position #{queue_len}):\n"
                         f"> 🎵 **[{song.title}]({song.webpage_url})**\n"
-                        f"⏱️ مدت زمان: `{song.duration_str}` | خواننده: `{song.uploader}`"
+                        f"⏱️ Duration: `{song.duration_str}` | Uploader: `{song.uploader}`"
                     )
             else:
                 await self.send_message(
                     room_id,
-                    f"❌ متأسفانه آهنگی برای عبارت یا لینک پیدا نشد:\n`{query}`"
+                    f"❌ No results found for that query or link:\n`{query}`"
                 )
             return
 
