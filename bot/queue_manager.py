@@ -174,16 +174,6 @@ class RoomPlayer:
             return True
         return await self.voice_client.join(self.room_id)
 
-    async def stop_playback(self):
-        """Clears the queue and stops the current track, but stays connected to the call."""
-        async with self._queue_lock:
-            self._queue.clear()
-
-        self._skip_event.set()
-
-        if self.voice_client.audio_streamer:
-            await self.voice_client.audio_streamer.stop()
-
     def toggle_loop(self) -> bool:
         """Toggles repeat-current-track mode. Returns the new state."""
         self.loop_enabled = not self.loop_enabled

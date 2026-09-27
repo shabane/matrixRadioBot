@@ -58,7 +58,7 @@ Powered by **LiveKit WebRTC**, **yt-dlp**, and **FFmpeg**, it supports real-time
 | `@radio skip` | Skip the currently playing track and start the next one |
 | `@radio queue` | View the list of tracks in the room's playback queue |
 | `@radio np` | Display information about the currently playing track (title, duration, source) |
-| `@radio stop` | Stop playback and clear the queue, but stay connected to the call |
+| `@radio stop` | Stop playback exactly where it is (same as pause) — queue and loop are kept, use `resume` to continue |
 | `@radio leave` | Clear the queue and immediately disconnect from the voice call |
 | `@radio help` | Show available commands and usage guide |
 
@@ -81,7 +81,8 @@ to mention the bot.
 | `!queue` | `!q` | Show queue with ETA |
 | `!nowplaying` | `!np` | Show current track |
 | `!skip` | `!s` | Skip current track |
-| `!stop` | `!x` | Stop playback and clear queue (stays connected to the call) |
+| `!stop` | `!x` | Stop playback exactly where it is (queue and loop are kept, stays connected) |
+| `!resume` | `!rs` | Resume playback from where it stopped |
 | `!loop` | `!lp` | Toggle loop mode (repeats the current track) |
 | `!progress` | `!pr` | Show an ASCII progress bar for the current track |
 | `!history` | `!hist` | Show recent playback history |

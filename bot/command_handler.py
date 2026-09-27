@@ -30,6 +30,7 @@ BANG_ALIASES = {
     "nowplaying": "nowplaying", "np": "nowplaying",
     "skip": "skip", "s": "skip",
     "stop": "stop", "x": "stop",
+    "resume": "resume", "rs": "resume",
     "loop": "loop", "lp": "loop",
     "progress": "progress", "pr": "progress",
     "history": "history", "hist": "history",
@@ -57,7 +58,8 @@ BANG_HELP_TEXT = (
     "`!queue` (`!q`) - show queue with ETA\n"
     "`!nowplaying` (`!np`) - show current track\n"
     "`!skip` (`!s`) - skip current track\n"
-    "`!stop` (`!x`) - stop playback and clear queue\n"
+    "`!stop` (`!x`) - stop playback where it is (queue/loop kept, stays connected)\n"
+    "`!resume` (`!rs`) - resume playback from where it stopped\n"
     "`!loop` (`!lp`) - toggle loop mode\n"
     "`!progress` (`!pr`) - show an ASCII progress bar for the current track\n"
     "`!history` (`!hist`) - show recent playback history\n\n"
@@ -131,8 +133,8 @@ class CommandHandler:
 
         player = await self.queue_manager.get_player(room_id)
 
-        # 1. Pause
-        if cmd_lower in ("pause", "پاز", "توقف"):
+        # 1. Pause / Stop (halts in place, keeps queue/loop, stays connected)
+        if cmd_lower in ("pause", "stop", "پاز", "توقف"):
             paused = await player.pause()
             if paused:
                 await self.send_message(room_id, "⏸️ **پخش موسیقی متوقف شد.** (برای ادامه `@radio resume`)")
@@ -162,12 +164,6 @@ class CommandHandler:
         if cmd_lower in ("leave", "قطع", "خروج"):
             await player.leave()
             await self.send_message(room_id, "👋 **صف پاک شد و بات از تماس خارج شد.**")
-            return
-
-        # 4b. Stop (halts playback and clears the queue, but stays connected to the call)
-        if cmd_lower in ("stop",):
-            await player.stop_playback()
-            await self.send_message(room_id, "⏹️ **پخش متوقف شد و صف پاک شد.** (بات همچنان در تماس باقی می‌ماند)")
             return
 
         # 5. Queue / List
@@ -388,8 +384,19 @@ class CommandHandler:
 
     async def _bang_stop(self, room_id: str, sender: str, args: str):
         player = await self.queue_manager.get_player(room_id)
-        await player.stop_playback()
-        await self.send_message(room_id, "⏹️ Stopped playback and cleared the queue.")
+        paused = await player.pause()
+        if paused:
+            await self.send_message(room_id, "⏸️ Stopped where it is. Queue and loop are kept — use `!resume` to continue.")
+        else:
+            await self.send_message(room_id, "⚠️ Nothing is playing.")
+
+    async def _bang_resume(self, room_id: str, sender: str, args: str):
+        player = await self.queue_manager.get_player(room_id)
+        resumed = await player.resume()
+        if resumed:
+            await self.send_message(room_id, "▶️ Resumed playback.")
+        else:
+            await self.send_message(room_id, "⚠️ Nothing is stopped/paused.")
 
     async def _bang_loop(self, room_id: str, sender: str, args: str):
         player = await self.queue_manager.get_player(room_id)
