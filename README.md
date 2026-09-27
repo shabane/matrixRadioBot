@@ -81,6 +81,7 @@ to mention the bot.
 | `!skip` | `!s` | Skip current track |
 | `!stop` | `!x` | Stop playback and clear queue (stays connected to the call) |
 | `!loop` | `!lp` | Toggle loop mode (repeats the current track) |
+| `!progress` | `!pr` | Show an ASCII progress bar for the current track |
 | `!history` | `!hist` | Show recent playback history |
 
 ### Saved Queues

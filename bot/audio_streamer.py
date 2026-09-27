@@ -189,6 +189,7 @@ class AudioStreamer:
                     break
 
                 frames_count += 1
+                self.frames_streamed = frames_count
                 if len(chunk) < CHUNK_SIZE:
                     chunk = chunk + silence_padding[:(CHUNK_SIZE - len(chunk))]
 

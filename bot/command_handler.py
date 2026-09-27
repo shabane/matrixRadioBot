@@ -31,6 +31,7 @@ BANG_ALIASES = {
     "skip": "skip", "s": "skip",
     "stop": "stop", "x": "stop",
     "loop": "loop", "lp": "loop",
+    "progress": "progress", "pr": "progress",
     "history": "history", "hist": "history",
     "save": "save", "sv": "save",
     "load": "load", "ld": "load",
@@ -58,6 +59,7 @@ BANG_HELP_TEXT = (
     "`!skip` (`!s`) - skip current track\n"
     "`!stop` (`!x`) - stop playback and clear queue\n"
     "`!loop` (`!lp`) - toggle loop mode\n"
+    "`!progress` (`!pr`) - show an ASCII progress bar for the current track\n"
     "`!history` (`!hist`) - show recent playback history\n\n"
     "**Saved Queues**\n"
     "`!save` (`!sv`) `<name> [--force]` - save current+upcoming queue\n"
@@ -366,6 +368,36 @@ class CommandHandler:
         player = await self.queue_manager.get_player(room_id)
         enabled = player.toggle_loop()
         await self.send_message(room_id, f"Loop mode {'enabled 🔁' if enabled else 'disabled'}.")
+
+    async def _bang_progress(self, room_id: str, sender: str, args: str):
+        player = await self.queue_manager.get_player(room_id)
+        curr = player.current_song
+        if not curr:
+            await self.send_message(room_id, "💤 Nothing is playing right now.")
+            return
+
+        streamer = player.voice_client.audio_streamer
+        elapsed = (streamer.frames_streamed * FRAME_DURATION_MS / 1000) if streamer else 0
+        duration = curr.duration or 0
+
+        if duration <= 0:
+            await self.send_message(
+                room_id,
+                f"🎵 **{curr.title}**\n"
+                f"`🔴 LIVE` — elapsed `{self._format_seconds(elapsed)}`"
+            )
+            return
+
+        elapsed = min(elapsed, duration)
+        width = 20
+        filled = int(width * elapsed / duration)
+        bar = "█" * filled + "░" * (width - filled)
+        icon = "⏸️" if player.is_paused else "▶️"
+        await self.send_message(
+            room_id,
+            f"🎵 **{curr.title}**\n"
+            f"`{icon} [{bar}] {self._format_seconds(elapsed)} / {self._format_seconds(duration)}`"
+        )
 
     async def _bang_history(self, room_id: str, sender: str, args: str):
         player = await self.queue_manager.get_player(room_id)
