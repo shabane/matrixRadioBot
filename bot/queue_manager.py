@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 from bot.song_resolver import SongResolver, ResolvedSong
 from bot.livekit_voice import LiveKitVoiceClient
 from bot.audio_settings import AudioSettings
-from bot.storage import QueueStore, HistoryStore
+from bot.storage import QueueStore, HistoryStore, LiveStateStore
 
 logger = logging.getLogger("radio.queue")
 
@@ -17,6 +17,7 @@ IDLE_TIMEOUT_SECONDS = 60
 
 _queue_store = QueueStore()
 _history_store = HistoryStore()
+_live_state_store = LiveStateStore()
 
 
 class RoomPlayer:
@@ -68,6 +69,23 @@ class RoomPlayer:
     def get_queue(self) -> List[ResolvedSong]:
         return list(self._queue)
 
+    def _persist_live_state(self):
+        """Snapshots the current song + remaining queue + loop flag so a restart can resume it."""
+        songs = ([self._current_song] if self._current_song else []) + list(self._queue)
+        if songs:
+            _live_state_store.save(self.room_id, songs, self.loop_enabled)
+        else:
+            _live_state_store.clear(self.room_id)
+
+    async def restore_live_state(self, songs: List[ResolvedSong], loop_enabled: bool):
+        """Re-enqueues tracks left over from before a restart (e.g. a redeploy) and resumes them."""
+        async with self._queue_lock:
+            self._queue.extend(songs)
+        self.loop_enabled = loop_enabled
+
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(self._worker_loop())
+
     async def add_query(self, query: str, requested_by: str) -> Optional[ResolvedSong]:
         """Resolves the song and enqueues it."""
         song = await self.resolver.resolve(query, requested_by)
@@ -77,6 +95,7 @@ class RoomPlayer:
         async with self._queue_lock:
             self._queue.append(song)
             pos = len(self._queue)
+        self._persist_live_state()
 
         logger.info("[%s] Enqueued song: %s (Position: %d)", self.room_id, song.title, pos)
 
@@ -112,6 +131,7 @@ class RoomPlayer:
             async with self._queue_lock:
                 self._queue.append(song)
             added += 1
+            self._persist_live_state()
 
             if self._worker_task is None or self._worker_task.done():
                 self._worker_task = asyncio.create_task(self._worker_loop())
@@ -167,6 +187,7 @@ class RoomPlayer:
         self._current_song = None
         self._worker_task = None
         self.loop_enabled = False
+        self._persist_live_state()
         logger.info("[%s] Room player stopped and left call.", self.room_id)
 
     async def join_call(self) -> bool:
@@ -175,9 +196,26 @@ class RoomPlayer:
             return True
         return await self.voice_client.join(self.room_id)
 
+    async def shutdown(self):
+        """Stops playback for process exit WITHOUT clearing the queue, so restore_live_state()
+        can resume it after the process restarts (e.g. a redeploy). Unlike leave(), this
+        intentionally leaves the already-persisted live state file in place."""
+        if self.voice_client.audio_streamer:
+            await self.voice_client.audio_streamer.stop()
+
+        if self._worker_task and not self._worker_task.done():
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+
+        await self.voice_client.leave()
+
     def toggle_loop(self) -> bool:
         """Toggles repeat-current-track mode. Returns the new state."""
         self.loop_enabled = not self.loop_enabled
+        self._persist_live_state()
         return self.loop_enabled
 
     def get_history(self, limit: int = 10) -> List[ResolvedSong]:
@@ -210,6 +248,7 @@ class RoomPlayer:
 
         async with self._queue_lock:
             self._queue.extend(songs)
+        self._persist_live_state()
 
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop())
@@ -271,12 +310,15 @@ class RoomPlayer:
                         )
                         await self.voice_client.leave()
                         self._current_song = None
+                        self.loop_enabled = False
+                        self._persist_live_state()
                         break
                     else:
                         continue
 
                 self._current_song = song
                 self._skip_event.clear()
+                self._persist_live_state()
 
                 # Ensure voice client is connected
                 if not self.voice_client.is_connected:
@@ -349,6 +391,7 @@ class RoomPlayer:
 
                 if track_was_skipped and self.loop_enabled:
                     self.loop_enabled = False
+                    self._persist_live_state()
                     await self.send_message(
                         self.room_id, "🔁 **Loop mode disabled because the track was skipped.**"
                     )
@@ -368,6 +411,7 @@ class RoomPlayer:
                 if stream_ok and not track_was_skipped and self.loop_enabled:
                     async with self._queue_lock:
                         self._queue.insert(0, song)
+                    self._persist_live_state()
 
                 logger.info(
                     "[%s] Finished processing track: %s (stream_ok=%s)",
@@ -422,11 +466,37 @@ class QueueManager:
             return self._players[room_id]
 
     async def cleanup_all(self):
-        """Leaves all active voice calls cleanly on bot shutdown."""
+        """Stops all active voice calls cleanly on process exit, preserving each room's queue
+        (via its already-persisted live state) so it can resume on the next start."""
         async with self._lock:
             for player in self._players.values():
-                await player.leave()
+                await player.shutdown()
             self._players.clear()
+
+    async def restore_all_live_state(self):
+        """Resumes any rooms that had an in-flight queue when the process last stopped
+        (e.g. a redeploy or crash)."""
+        for state in _live_state_store.load_all():
+            room_id = state["room_id"]
+            songs = state["songs"]
+
+            # Clear the on-disk snapshot before resuming: once the worker loop starts consuming
+            # the restored queue it will persist fresh state of its own, and clearing afterwards
+            # would race with (and could clobber) that fresh write.
+            _live_state_store.clear(room_id)
+            if not songs:
+                continue
+
+            try:
+                player = await self.get_player(room_id)
+                await player.restore_live_state(songs, state["loop_enabled"])
+                await self.send_message(
+                    room_id,
+                    f"🔄 **Bot restarted.** Resuming the queue where it left off ({len(songs)} track(s))..."
+                )
+                logger.info("[%s] Restored %d track(s) from live state.", room_id, len(songs))
+            except Exception as e:
+                logger.error("Failed to restore live state for room %s: %s", room_id, e)
 
     def get_status(self) -> dict:
         """Returns a snapshot of bot-wide playback status across all rooms."""

@@ -125,6 +125,9 @@ async def main():
 
     client_task = asyncio.create_task(matrix_client.start())
 
+    await matrix_client.ready_event.wait()
+    await queue_manager.restore_all_live_state()
+
     await stop_event.wait()
 
     logger.info("Stopping Matrix client and audio queues...")

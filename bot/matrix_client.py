@@ -53,6 +53,7 @@ class MatrixClient:
         self._running = False
         self._message_handler: Optional[Callable] = None
         self._joined_rooms: set[str] = set()
+        self.ready_event = asyncio.Event()
 
     def set_message_handler(self, handler: Callable):
         self._message_handler = handler
@@ -84,6 +85,8 @@ class MatrixClient:
                     logger.warning("Initial sync returned status %d: %s", resp.status, text)
         except Exception as e:
             logger.warning("Error during initial sync: %s", e)
+
+        self.ready_event.set()
 
         # Main sync loop
         while self._running:

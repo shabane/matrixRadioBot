@@ -22,6 +22,7 @@ logger = logging.getLogger("radio.storage")
 DATA_DIR = Path(os.environ.get("RADIO_DATA_DIR", "data")).resolve()
 SAVED_QUEUES_DIR = DATA_DIR / "saved_queues"
 HISTORY_DIR = DATA_DIR / "history"
+LIVE_STATE_DIR = DATA_DIR / "live_state"
 
 HISTORY_LIMIT = 50
 
@@ -101,6 +102,53 @@ class QueueStore:
         new_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         old_path.unlink()
         return True
+
+
+class LiveStateStore:
+    """Persists each room's in-flight (current song + remaining queue + loop state) so it can
+    survive a process restart, e.g. a redeploy. Written continuously on every queue change
+    rather than only at shutdown, since a k8s rollout restart is not guaranteed to give the
+    process a graceful shutdown window."""
+
+    def _path(self, room_id: str) -> Path:
+        return LIVE_STATE_DIR / f"{_safe_slug(room_id)}.json"
+
+    def save(self, room_id: str, songs: List[ResolvedSong], loop_enabled: bool):
+        LIVE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "room_id": room_id,
+            "songs": [_song_to_dict(s) for s in songs],
+            "loop_enabled": loop_enabled,
+        }
+        try:
+            self._path(room_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.error("Failed to persist live state for room %s: %s", room_id, e)
+
+    def clear(self, room_id: str):
+        path = self._path(room_id)
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception as e:
+                logger.error("Failed to clear live state for room %s: %s", room_id, e)
+
+    def load_all(self) -> List[dict]:
+        """Returns every saved room's state as {"room_id", "songs", "loop_enabled"}."""
+        results = []
+        if not LIVE_STATE_DIR.exists():
+            return results
+        for path in sorted(LIVE_STATE_DIR.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                results.append({
+                    "room_id": payload["room_id"],
+                    "songs": [_song_from_dict(s) for s in payload.get("songs", [])],
+                    "loop_enabled": bool(payload.get("loop_enabled", False)),
+                })
+            except Exception as e:
+                logger.error("Failed to load live state file %s: %s", path, e)
+        return results
 
 
 class HistoryStore:
