@@ -32,6 +32,7 @@ BANG_ALIASES = {
     "stop": "stop", "x": "stop",
     "resume": "resume", "rs": "resume",
     "loop": "loop", "lp": "loop",
+    "loopqueue": "loopqueue", "lq": "loopqueue",
     "progress": "progress", "pr": "progress",
     "history": "history", "hist": "history",
     "save": "save", "sv": "save",
@@ -60,7 +61,8 @@ BANG_HELP_TEXT = (
     "`!skip` (`!s`) - skip current track\n"
     "`!stop` (`!x`) - stop playback where it is (queue/loop kept, stays connected)\n"
     "`!resume` (`!rs`) - resume playback from where it stopped\n"
-    "`!loop` (`!lp`) - toggle loop mode (auto-disables if the looped track is skipped)\n"
+    "`!loop` (`!lp`) - toggle single-track loop (mutually exclusive with `!loopqueue`; auto-disables if skipped)\n"
+    "`!loopqueue` (`!lq`) - toggle whole-queue loop (replays the queue from the top; mutually exclusive with `!loop`)\n"
     "`!progress` (`!pr`) - show an ASCII progress bar for the current track\n"
     "`!history` (`!hist`) - show recent playback history\n\n"
     "**Saved Queues**\n"
@@ -341,7 +343,12 @@ class CommandHandler:
             await self.send_message(room_id, "📭 The queue is empty.")
             return
 
-        lines = ["**Queue:**"]
+        loop_note = ""
+        if player.loop_enabled:
+            loop_note = " (🔂 track loop on)"
+        elif player.loop_queue_enabled:
+            loop_note = " (🔁 queue loop on)"
+        lines = [f"**Queue:**{loop_note}"]
         eta_seconds = 0.0
         if curr:
             streamer = player.voice_client.audio_streamer
@@ -401,7 +408,18 @@ class CommandHandler:
     async def _bang_loop(self, room_id: str, sender: str, args: str):
         player = await self.queue_manager.get_player(room_id)
         enabled = player.toggle_loop()
-        await self.send_message(room_id, f"Loop mode {'enabled 🔁' if enabled else 'disabled'}.")
+        if enabled:
+            await self.send_message(room_id, "Loop mode enabled 🔁 (repeats the current track).")
+        else:
+            await self.send_message(room_id, "Loop mode disabled.")
+
+    async def _bang_loopqueue(self, room_id: str, sender: str, args: str):
+        player = await self.queue_manager.get_player(room_id)
+        enabled = player.toggle_loop_queue()
+        if enabled:
+            await self.send_message(room_id, "Queue loop enabled 🔁 (replays the whole queue once it ends).")
+        else:
+            await self.send_message(room_id, "Queue loop disabled.")
 
     async def _bang_progress(self, room_id: str, sender: str, args: str):
         player = await self.queue_manager.get_player(room_id)
@@ -586,7 +604,7 @@ class CommandHandler:
             room_id,
             f"🔧 **Diagnostics ({room_id}):**\n"
             f"Connected: `{diag['connected']}` | Playing: `{diag['is_playing']}` | Paused: `{diag['is_paused']}`\n"
-            f"Loop: `{diag['loop_enabled']}` | Queue length: `{diag['queue_length']}`\n"
+            f"Loop: `{diag['loop_enabled']}` | Queue Loop: `{diag['loop_queue_enabled']}` | Queue length: `{diag['queue_length']}`\n"
             f"Frames streamed: `{diag['frames_streamed']}` | Last stream success: `{diag['last_stream_success']}`\n"
             f"Current target: `{diag['current_target']}`\n"
             f"Proxy configured: `{diag['proxy_configured']}` | Idle timeout: `{diag['idle_timeout_sec']}s`\n"

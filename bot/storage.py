@@ -113,12 +113,13 @@ class LiveStateStore:
     def _path(self, room_id: str) -> Path:
         return LIVE_STATE_DIR / f"{_safe_slug(room_id)}.json"
 
-    def save(self, room_id: str, songs: List[ResolvedSong], loop_enabled: bool):
+    def save(self, room_id: str, songs: List[ResolvedSong], loop_enabled: bool, loop_queue_enabled: bool = False):
         LIVE_STATE_DIR.mkdir(parents=True, exist_ok=True)
         payload = {
             "room_id": room_id,
             "songs": [_song_to_dict(s) for s in songs],
             "loop_enabled": loop_enabled,
+            "loop_queue_enabled": loop_queue_enabled,
         }
         try:
             self._path(room_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -145,6 +146,7 @@ class LiveStateStore:
                     "room_id": payload["room_id"],
                     "songs": [_song_from_dict(s) for s in payload.get("songs", [])],
                     "loop_enabled": bool(payload.get("loop_enabled", False)),
+                    "loop_queue_enabled": bool(payload.get("loop_queue_enabled", False)),
                 })
             except Exception as e:
                 logger.error("Failed to load live state file %s: %s", path, e)

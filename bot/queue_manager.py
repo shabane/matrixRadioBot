@@ -49,6 +49,7 @@ class RoomPlayer:
 
         self.audio_settings = AudioSettings()
         self.loop_enabled = False
+        self.loop_queue_enabled = False
         self._history: List[ResolvedSong] = _history_store.load(room_id)
 
     @property
@@ -71,18 +72,19 @@ class RoomPlayer:
         return list(self._queue)
 
     def _persist_live_state(self):
-        """Snapshots the current song + remaining queue + loop flag so a restart can resume it."""
+        """Snapshots the current song + remaining queue + loop flags so a restart can resume it."""
         songs = ([self._current_song] if self._current_song else []) + list(self._queue)
         if songs:
-            _live_state_store.save(self.room_id, songs, self.loop_enabled)
+            _live_state_store.save(self.room_id, songs, self.loop_enabled, self.loop_queue_enabled)
         else:
             _live_state_store.clear(self.room_id)
 
-    async def restore_live_state(self, songs: List[ResolvedSong], loop_enabled: bool):
+    async def restore_live_state(self, songs: List[ResolvedSong], loop_enabled: bool, loop_queue_enabled: bool = False):
         """Re-enqueues tracks left over from before a restart (e.g. a redeploy) and resumes them."""
         async with self._queue_lock:
             self._queue.extend(songs)
         self.loop_enabled = loop_enabled
+        self.loop_queue_enabled = loop_queue_enabled
 
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop())
@@ -199,6 +201,7 @@ class RoomPlayer:
         self._current_song = None
         self._worker_task = None
         self.loop_enabled = False
+        self.loop_queue_enabled = False
         self._persist_live_state()
         logger.info("[%s] Room player stopped and left call.", self.room_id)
 
@@ -225,10 +228,20 @@ class RoomPlayer:
         await self.voice_client.leave()
 
     def toggle_loop(self) -> bool:
-        """Toggles repeat-current-track mode. Returns the new state."""
+        """Toggles repeat-current-track mode. Mutually exclusive with queue-loop. Returns the new state."""
         self.loop_enabled = not self.loop_enabled
+        if self.loop_enabled:
+            self.loop_queue_enabled = False
         self._persist_live_state()
         return self.loop_enabled
+
+    def toggle_loop_queue(self) -> bool:
+        """Toggles repeat-whole-queue mode. Mutually exclusive with single-track loop. Returns the new state."""
+        self.loop_queue_enabled = not self.loop_queue_enabled
+        if self.loop_queue_enabled:
+            self.loop_enabled = False
+        self._persist_live_state()
+        return self.loop_queue_enabled
 
     def get_history(self, limit: int = 10) -> List[ResolvedSong]:
         """Returns the most recently played tracks, newest first."""
@@ -284,6 +297,7 @@ class RoomPlayer:
             "is_playing": self.is_playing,
             "is_paused": self.is_paused,
             "loop_enabled": self.loop_enabled,
+            "loop_queue_enabled": self.loop_queue_enabled,
             "queue_length": len(self._queue),
             "frames_streamed": streamer.frames_streamed if streamer else 0,
             "last_stream_success": streamer.last_stream_success if streamer else None,
@@ -323,6 +337,7 @@ class RoomPlayer:
                         await self.voice_client.leave()
                         self._current_song = None
                         self.loop_enabled = False
+                        self.loop_queue_enabled = False
                         self._persist_live_state()
                         break
                     else:
@@ -424,6 +439,10 @@ class RoomPlayer:
                     async with self._queue_lock:
                         self._queue.insert(0, song)
                     self._persist_live_state()
+                elif stream_ok and not track_was_skipped and self.loop_queue_enabled:
+                    async with self._queue_lock:
+                        self._queue.append(song)
+                    self._persist_live_state()
 
                 logger.info(
                     "[%s] Finished processing track: %s (stream_ok=%s)",
@@ -501,7 +520,7 @@ class QueueManager:
 
             try:
                 player = await self.get_player(room_id)
-                await player.restore_live_state(songs, state["loop_enabled"])
+                await player.restore_live_state(songs, state["loop_enabled"], state["loop_queue_enabled"])
                 await self.send_message(
                     room_id,
                     f"🔄 **Bot restarted.** Resuming the queue where it left off ({len(songs)} track(s))..."
