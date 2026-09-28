@@ -25,9 +25,10 @@ Powered by **LiveKit WebRTC**, **yt-dlp**, and **FFmpeg**, it supports real-time
   - 📁 **Direct Audio Streams:** Supports raw audio formats (`.mp3`, `.opus`, `.ogg`, `.flac`, `.wav`, `.aac`, `.m3u8`).
   - 📃 **Playlists:** `!play`/`@radio play` also accepts YouTube playlist links, Spotify playlists/albums, and SoundCloud sets — tracks are resolved and queued in the background as soon as they're found, so playback starts without waiting for the whole playlist.
 
-- ⚡ **Zero-Disk Streaming Pipeline:**
-  - Streams audio on-the-fly by piping `yt-dlp` output directly into `FFmpeg` without storing large files on disk.
+- ⚡ **Streaming Pipeline with Local Audio Cache:**
+  - Streams audio on-the-fly by piping `yt-dlp` output directly into `FFmpeg` - playback starts immediately, it doesn't wait for a full download.
   - Real-time transcoding to pristine 48kHz 16-bit signed PCM audio frames (standard WebRTC Opus format).
+  - Each successfully-streamed track is also cached to disk (`data/audio_cache/`, capped at 500MB by default, configurable via `RADIO_AUDIO_CACHE_MAX_MB`) so repeat plays of the same track - most notably `!loop` / `!loopqueue` - reuse the cached audio instead of re-fetching it from YouTube/SoundCloud every time. Per-track volume/normalize/fade-in settings are still re-applied fresh on every play, cache hit or not. The cache lives only as long as the current process, same as saved queues and history.
 
 - 🔒 **Configurable Proxy Support (SOCKS5 / HTTP):**
   - Bypass censorship and geo-restrictions by routing extraction and streaming requests through a proxy.

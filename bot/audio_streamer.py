@@ -6,10 +6,12 @@ Streams audio from direct URLs or pipes yt-dlp directly into FFmpeg for raw 48kH
 import os
 import asyncio
 import logging
+from pathlib import Path
 from typing import Optional, List
 import livekit.rtc as rtc
 
 from bot.audio_settings import AudioSettings
+from bot import audio_cache
 
 logger = logging.getLogger("radio.audio")
 
@@ -28,6 +30,7 @@ class AudioStreamer:
 
         self.ffmpeg_proc: Optional[asyncio.subprocess.Process] = None
         self.ytdlp_proc: Optional[asyncio.subprocess.Process] = None
+        self.tee_proc: Optional[asyncio.subprocess.Process] = None
 
         self._is_playing = False
         self._is_paused = False
@@ -42,6 +45,10 @@ class AudioStreamer:
         self.frames_streamed: int = 0
         self.last_stream_success: bool = False
         self.last_error_message: Optional[str] = None
+
+        self._cache_tmp_path: Optional[Path] = None
+        self._cache_target: Optional[str] = None
+        self._reached_natural_eof: bool = False
 
     @property
     def is_playing(self) -> bool:
@@ -77,6 +84,9 @@ class AudioStreamer:
         self._ytdlp_stderr.clear()
         self._ffmpeg_stderr.clear()
         self._drain_tasks.clear()
+        self._cache_tmp_path = None
+        self._cache_target = None
+        self._reached_natural_eof = False
 
         self._is_playing = True
         self._is_paused = False
@@ -107,62 +117,104 @@ class AudioStreamer:
                         asyncio.create_task(self._drain_stream(self.ffmpeg_proc.stderr, self._ffmpeg_stderr))
                     )
             else:
-                logger.info("Streaming via yt-dlp -> FFmpeg pipeline: %s", target)
-                ytdlp_cmd = [
-                    "yt-dlp",
-                    "-f", "bestaudio/best",
-                    "-o", "-",
-                    "--quiet",
-                    "--no-warnings",
-                    "--no-playlist",
-                    "--socket-timeout", "15",
-                    "--retries", "5",
-                    "--fragment-retries", "5",
-                    "--buffer-size", "16K",
-                    target
-                ]
-                if self.proxy_url:
-                    ytdlp_cmd[1:1] = ["--proxy", self.proxy_url]
-
-                ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-re",
-                    "-i", "pipe:0",
-                    "-vn",
-                    *af_args,
-                    "-f", "s16le",
-                    "-ar", str(SAMPLE_RATE),
-                    "-ac", str(NUM_CHANNELS),
-                    "-loglevel", "warning",
-                    "-"
-                ]
-
-                # Use OS pipe between yt-dlp and ffmpeg
-                r_fd, w_fd = os.pipe()
-
-                self.ytdlp_proc = await asyncio.create_subprocess_exec(
-                    *ytdlp_cmd,
-                    stdout=w_fd,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                os.close(w_fd)  # Close write end in parent
-
-                self.ffmpeg_proc = await asyncio.create_subprocess_exec(
-                    *ffmpeg_cmd,
-                    stdin=r_fd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                os.close(r_fd)  # Close read end in parent
-
-                if self.ytdlp_proc.stderr:
-                    self._drain_tasks.append(
-                        asyncio.create_task(self._drain_stream(self.ytdlp_proc.stderr, self._ytdlp_stderr))
+                cached = audio_cache.get(target)
+                if cached:
+                    # A previous play of this exact target (e.g. an earlier loop repeat)
+                    # already downloaded it - skip yt-dlp/network entirely and transcode
+                    # straight from the cached local file. Audio settings (volume/
+                    # normalize/fade-in) are still applied fresh here, cache hit or not.
+                    logger.info("Using cached audio for: %s (%s)", target, cached.name)
+                    ffmpeg_cmd = [
+                        "ffmpeg",
+                        "-re",
+                        "-i", str(cached),
+                        "-vn",
+                        *af_args,
+                        "-f", "s16le",
+                        "-ar", str(SAMPLE_RATE),
+                        "-ac", str(NUM_CHANNELS),
+                        "-loglevel", "warning",
+                        "-"
+                    ]
+                    self.ffmpeg_proc = await asyncio.create_subprocess_exec(
+                        *ffmpeg_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
                     )
-                if self.ffmpeg_proc.stderr:
-                    self._drain_tasks.append(
-                        asyncio.create_task(self._drain_stream(self.ffmpeg_proc.stderr, self._ffmpeg_stderr))
+                    if self.ffmpeg_proc.stderr:
+                        self._drain_tasks.append(
+                            asyncio.create_task(self._drain_stream(self.ffmpeg_proc.stderr, self._ffmpeg_stderr))
+                        )
+                else:
+                    logger.info("Streaming via yt-dlp -> FFmpeg pipeline: %s", target)
+                    ytdlp_cmd = [
+                        "yt-dlp",
+                        "-f", "bestaudio/best",
+                        "-o", "-",
+                        "--quiet",
+                        "--no-warnings",
+                        "--no-playlist",
+                        "--socket-timeout", "15",
+                        "--retries", "5",
+                        "--fragment-retries", "5",
+                        "--buffer-size", "16K",
+                        target
+                    ]
+                    if self.proxy_url:
+                        ytdlp_cmd[1:1] = ["--proxy", self.proxy_url]
+
+                    ffmpeg_cmd = [
+                        "ffmpeg",
+                        "-re",
+                        "-i", "pipe:0",
+                        "-vn",
+                        *af_args,
+                        "-f", "s16le",
+                        "-ar", str(SAMPLE_RATE),
+                        "-ac", str(NUM_CHANNELS),
+                        "-loglevel", "warning",
+                        "-"
+                    ]
+
+                    self._cache_target = target
+                    self._cache_tmp_path = audio_cache.new_tmp_path(target)
+
+                    # yt-dlp -> tee (also writes a copy to disk for future cache hits) -> ffmpeg
+                    r1_fd, w1_fd = os.pipe()
+                    r2_fd, w2_fd = os.pipe()
+
+                    self.ytdlp_proc = await asyncio.create_subprocess_exec(
+                        *ytdlp_cmd,
+                        stdout=w1_fd,
+                        stderr=asyncio.subprocess.PIPE
                     )
+                    os.close(w1_fd)
+
+                    self.tee_proc = await asyncio.create_subprocess_exec(
+                        "tee", str(self._cache_tmp_path),
+                        stdin=r1_fd,
+                        stdout=w2_fd,
+                        stderr=asyncio.subprocess.DEVNULL
+                    )
+                    os.close(r1_fd)
+                    os.close(w2_fd)
+
+                    self.ffmpeg_proc = await asyncio.create_subprocess_exec(
+                        *ffmpeg_cmd,
+                        stdin=r2_fd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    os.close(r2_fd)
+
+                    if self.ytdlp_proc.stderr:
+                        self._drain_tasks.append(
+                            asyncio.create_task(self._drain_stream(self.ytdlp_proc.stderr, self._ytdlp_stderr))
+                        )
+                    if self.ffmpeg_proc.stderr:
+                        self._drain_tasks.append(
+                            asyncio.create_task(self._drain_stream(self.ffmpeg_proc.stderr, self._ffmpeg_stderr))
+                        )
 
         except Exception as e:
             logger.error("Failed to spawn audio streaming process: %s", e)
@@ -186,6 +238,7 @@ class AudioStreamer:
                 chunk = await self.ffmpeg_proc.stdout.read(CHUNK_SIZE)
                 if not chunk:
                     logger.info("Audio stream reached EOF after %d frames (%.2fs).", frames_count, frames_count * 0.02)
+                    self._reached_natural_eof = True
                     break
 
                 frames_count += 1
@@ -228,6 +281,16 @@ class AudioStreamer:
                 if self._ffmpeg_stderr:
                     logger.warning("FFmpeg stderr: %s", self._ffmpeg_stderr.decode(errors="replace").strip())
 
+            if self._cache_tmp_path is not None:
+                # Only promote a fully, naturally completed download (never a skip/stop-
+                # truncated one, which would permanently cut the cached track short).
+                if self._reached_natural_eof and self.last_stream_success:
+                    audio_cache.promote(self._cache_target, self._cache_tmp_path)
+                else:
+                    audio_cache.discard(self._cache_tmp_path)
+                self._cache_tmp_path = None
+                self._cache_target = None
+
             await self._kill_processes()
             logger.info("Audio stream completed. Success status: %s", self.last_stream_success)
 
@@ -252,7 +315,7 @@ class AudioStreamer:
                 task.cancel()
         self._drain_tasks.clear()
 
-        for proc in (self.ffmpeg_proc, self.ytdlp_proc):
+        for proc in (self.ffmpeg_proc, self.ytdlp_proc, self.tee_proc):
             if proc and proc.returncode is None:
                 try:
                     proc.kill()
@@ -261,6 +324,7 @@ class AudioStreamer:
                     pass
         self.ffmpeg_proc = None
         self.ytdlp_proc = None
+        self.tee_proc = None
 
     async def stop(self):
         """Stops playback and cancels tasks."""
