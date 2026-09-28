@@ -38,7 +38,11 @@ scp -q "$K8S_MANIFEST" "$SERVER:/tmp/matrixBot/kubernetes.yaml"
 # no live state yet, or the copy fails for any reason, we just proceed with a normal deploy.
 echo "==> Preserving in-flight playback queues across the restart (best effort)..."
 ssh "$SERVER" "rm -rf $LIVE_STATE_BACKUP && mkdir -p $LIVE_STATE_BACKUP"
-OLD_POD=$(ssh "$SERVER" "$KCTL get pods -n $NAMESPACE -l app=matrix-radio-bot -o jsonpath='{.items[0].metadata.name}' 2>/dev/null" || true)
+# --sort-by + take the last entry picks the NEWEST pod. This matters once a rollout is
+# underway: a pod being replaced keeps reporting .status.phase=Running while Terminating
+# (deletionTimestamp is set but the phase field doesn't reflect that), and plain [0] indexing
+# is unordered, so either can silently grab the wrong pod mid-rollout.
+OLD_POD=$(ssh "$SERVER" "$KCTL get pods -n $NAMESPACE -l app=matrix-radio-bot --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[*].metadata.name}' 2>/dev/null" | awk '{print $NF}' || true)
 if [ -n "$OLD_POD" ]; then
     if ssh "$SERVER" "$KCTL cp $NAMESPACE/$OLD_POD:/app/data/live_state $LIVE_STATE_BACKUP >/dev/null 2>&1"; then
         echo "    Backed up live state from pod $OLD_POD."
@@ -57,7 +61,7 @@ echo "==> Waiting for the new pod to come up..."
 ssh "$SERVER" "$KCTL rollout status deployment/matrix-radio-bot -n $NAMESPACE --timeout=180s"
 
 if ssh "$SERVER" "[ -n \"\$(ls -A $LIVE_STATE_BACKUP 2>/dev/null)\" ]"; then
-    NEW_POD=$(ssh "$SERVER" "$KCTL get pods -n $NAMESPACE -l app=matrix-radio-bot -o jsonpath='{.items[0].metadata.name}'")
+    NEW_POD=$(ssh "$SERVER" "$KCTL get pods -n $NAMESPACE -l app=matrix-radio-bot --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[*].metadata.name}'" | awk '{print $NF}')
     echo "==> Restoring in-flight queue state into new pod $NEW_POD..."
     ssh "$SERVER" "$KCTL exec $NEW_POD -n $NAMESPACE -- mkdir -p /app/data/live_state"
     if ssh "$SERVER" "$KCTL cp $LIVE_STATE_BACKUP/. $NAMESPACE/$NEW_POD:/app/data/live_state/ >/dev/null 2>&1"; then
