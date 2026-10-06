@@ -48,32 +48,43 @@ class SongResolver:
             return f"{hrs:02d}:{mins:02d}:{s:02d}"
         return f"{mins:02d}:{s:02d}"
 
-    def _resolve_spotify_metadata(self, spotify_url: str) -> Optional[str]:
-        """Extracts track title and artist from Spotify without needing API credentials."""
+    def _resolve_spotify_track_metadata(self, spotify_url: str) -> Optional[dict]:
+        """Extracts rich track metadata (title, artists, ISRC) from Spotify's embed page.
+
+        Uses the same __NEXT_DATA__ JSON blob that the playlist resolver already uses,
+        so no API key is needed. Returns a dict with 'title', 'artist', and 'isrc' (may
+        be empty string if Spotify didn't include it), or None on failure.
+        """
+        m = re.search(r"open\.spotify\.com/track/([A-Za-z0-9]+)", spotify_url)
+        if not m:
+            return None
+
+        track_id = m.group(1)
+        embed_url = f"https://open.spotify.com/embed/track/{track_id}"
         try:
-            oembed_url = f"https://open.spotify.com/oembed?url={spotify_url}"
-            req = urllib.request.Request(oembed_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            title = data.get("title", "").strip()
+            req = urllib.request.Request(embed_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
 
-            # Try to fetch artist from page meta description
-            artist = ""
-            try:
-                page_req = urllib.request.Request(spotify_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(page_req, timeout=6) as page_resp:
-                    html = page_resp.read().decode("utf-8", errors="ignore")
-                    m = re.search(r'<meta property="og:description" content="([^·"]+)', html)
-                    if m:
-                        artist = m.group(1).strip()
-            except Exception:
-                pass
+            m2 = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
+            if not m2:
+                return None
 
-            if artist and title:
-                return f"{artist} - {title}"
-            return title or None
+            data = json.loads(m2.group(1))
+            entity = data["props"]["pageProps"]["state"]["data"]["entity"]
+
+            title = re.sub(r"\s+", " ", (entity.get("name") or "")).strip()
+            artists = [
+                re.sub(r"\s+", " ", (a.get("name") or "")).strip()
+                for a in (entity.get("artists") or [])
+                if a.get("name")
+            ]
+            artist = ", ".join(artists)
+            isrc = ((entity.get("externalIds") or {}).get("isrc") or "").strip()
+
+            return {"title": title, "artist": artist, "isrc": isrc}
         except Exception as e:
-            logger.warning("Failed to extract Spotify metadata: %s", e)
+            logger.warning("Failed to extract Spotify track metadata from embed: %s", e)
             return None
 
     def is_playlist_url(self, query: str) -> bool:
@@ -126,7 +137,7 @@ class SongResolver:
                 title = re.sub(r"\s+", " ", (track.get("title") or "")).strip()
                 artist = re.sub(r"\s+", " ", (track.get("subtitle") or "")).strip()
                 if title and artist:
-                    queries.append(f"{artist} - {title}")
+                    queries.append(f'"{title}" "{artist}"')
                 elif title:
                     queries.append(title)
 
@@ -205,12 +216,25 @@ class SongResolver:
         # 2. Spotify Track URL
         if "open.spotify.com/track/" in query:
             source_type = "spotify"
-            meta_query = self._resolve_spotify_metadata(query)
-            if meta_query:
-                logger.info("Resolved Spotify URL to search term: '%s'", meta_query)
-                target_query = f"ytsearch1:{meta_query}"
+            meta = self._resolve_spotify_track_metadata(query)
+            if meta and meta.get("title"):
+                title = meta["title"]
+                artist = meta.get("artist", "")
+                isrc = meta.get("isrc", "")
+                if isrc:
+                    # ISRC is a unique per-recording code; searching it on YouTube
+                    # often surfaces the exact upload (official audio/MV).
+                    search_term = isrc
+                    logger.info("Resolved Spotify track via ISRC '%s': %s — %s", isrc, artist, title)
+                elif artist:
+                    search_term = f'"{title}" "{artist}"'
+                    logger.info("Resolved Spotify track: %s", search_term)
+                else:
+                    search_term = title
+                    logger.info("Resolved Spotify track (title only): %s", search_term)
+                target_query = f"ytsearch1:{search_term}"
             else:
-                logger.warning("Could not resolve Spotify metadata, falling back to search")
+                logger.warning("Could not resolve Spotify track metadata, falling back to URL search")
                 target_query = f"ytsearch1:{query}"
 
         # 3. SoundCloud
