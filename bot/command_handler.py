@@ -33,6 +33,9 @@ BANG_ALIASES = {
     "resume": "resume", "rs": "resume",
     "loop": "loop", "lp": "loop",
     "loopqueue": "loopqueue", "lq": "loopqueue",
+    "shuffle": "shuffle", "sh": "shuffle",
+    "remove": "remove", "rm": "remove",
+    "clear": "clear", "cls": "clear", "cq": "clear",
     "progress": "progress", "pr": "progress",
     "history": "history", "hist": "history",
     "save": "save", "sv": "save",
@@ -63,6 +66,9 @@ BANG_HELP_TEXT = (
     "`!resume` (`!rs`) - resume playback from where it stopped\n"
     "`!loop` (`!lp`) - toggle single-track loop (mutually exclusive with `!loopqueue`; auto-disables if skipped)\n"
     "`!loopqueue` (`!lq`) - toggle whole-queue loop (replays the queue from the top; mutually exclusive with `!loop`)\n"
+    "`!shuffle` (`!sh`) - shuffle the upcoming queue\n"
+    "`!remove` (`!rm`) `<position>` - remove track at position from the queue\n"
+    "`!clear` (`!cls`) - clear all upcoming tracks from the queue\n"
     "`!progress` (`!pr`) - show an ASCII progress bar for the current track\n"
     "`!history` (`!hist`) - show recent playback history\n\n"
     "**Saved Queues**\n"
@@ -203,19 +209,84 @@ class CommandHandler:
                 await self.send_message(room_id, "💤 Nothing is playing right now.")
             return
 
-        # 7. Help
+        # 7. Shuffle
+        if cmd_lower in ("shuffle", "sh"):
+            count = player.shuffle_queue()
+            if count > 1:
+                await self.send_message(room_id, f"🔀 Shuffled {count} tracks in the queue.")
+            elif count == 1:
+                await self.send_message(room_id, "⚠️ Only one track in the queue — nothing to shuffle.")
+            else:
+                await self.send_message(room_id, "📭 The queue is empty.")
+            return
+
+        # 8. Remove
+        if cmd_lower.startswith("remove ") or cmd_lower.startswith("rm "):
+            parts = cmd.split(maxsplit=1)
+            if len(parts) > 1:
+                try:
+                    position = int(parts[1].strip())
+                    if position < 1:
+                        await self.send_message(room_id, "⚠️ Position must be 1 or higher (use `@radio queue` to see positions).")
+                        return
+                    removed = player.remove_from_queue(position)
+                    if removed:
+                        await self.send_message(room_id, f"🗑️ Removed **{removed.title}** from position {position}.")
+                    else:
+                        queue_len = len(player.get_queue())
+                        if queue_len == 0:
+                            await self.send_message(room_id, "📭 The queue is empty.")
+                        else:
+                            await self.send_message(room_id, f"⚠️ Invalid position. Queue has {queue_len} track(s).")
+                except ValueError:
+                    await self.send_message(room_id, "⚠️ Usage: `@radio remove <position>`")
+                return
+
+        # 9. Clear
+        if cmd_lower in ("clear", "cls"):
+            count = player.clear_queue()
+            if count > 0:
+                await self.send_message(room_id, f"🗑️ Cleared {count} upcoming track(s) from the queue.")
+            else:
+                await self.send_message(room_id, "📭 The queue is already empty.")
+            return
+
+        # 10. Loop / Loopqueue
+        if cmd_lower in ("loop", "lp"):
+            enabled = player.toggle_loop()
+            if enabled:
+                await self.send_message(room_id, "🔂 Loop enabled for the current track.")
+            else:
+                await self.send_message(room_id, "Loop disabled.")
+            return
+
+        if cmd_lower in ("loopqueue", "lq"):
+            enabled = player.toggle_loop_queue()
+            if enabled:
+                await self.send_message(room_id, "🔁 Queue loop enabled (replays the whole queue once it ends).")
+            else:
+                await self.send_message(room_id, "Queue loop disabled.")
+            return
+
+        # 11. Help
         if cmd_lower in ("help", "?"):
             help_text = (
                 "📻 **Radio & Music Bot Help (supports YouTube, Spotify, SoundCloud):**\n\n"
                 "• `@radio <link>` : play from YouTube, SoundCloud, Spotify, or a direct link\n"
                 "• `@radio play <song name>` : search and play a song from YouTube\n"
-                "• `@radio pause` : pause playback\n"
+                "• `@radio pause` / `@radio stop` : pause playback\n"
                 "• `@radio resume` : resume playback\n"
                 "• `@radio skip` : skip the current track\n"
                 "• `@radio queue` : view the track queue\n"
+                "• `@radio shuffle` : shuffle upcoming tracks in the queue\n"
+                "• `@radio remove <position>` : remove a track from the queue\n"
+                "• `@radio clear` : clear all upcoming tracks from the queue\n"
+                "• `@radio loop` : toggle single-track loop\n"
+                "• `@radio loopqueue` : toggle whole-queue loop\n"
                 "• `@radio np` : view info about the current track\n"
                 "• `@radio leave` : leave the call and clear the queue\n\n"
-                "💡 *Tip: in a direct message (PV), you don't need to mention `@radio`.*"
+                "💡 *Tip: in a direct message (PV), you don't need to mention `@radio`.*\n"
+                "⚡ *Bang commands like `!play`, `!queue`, `!skip`, `!shuffle`, `!remove`, `!loop` work without mentions.*"
             )
             await self.send_message(room_id, help_text)
             return
@@ -420,6 +491,46 @@ class CommandHandler:
             await self.send_message(room_id, "Queue loop enabled 🔁 (replays the whole queue once it ends).")
         else:
             await self.send_message(room_id, "Queue loop disabled.")
+
+    async def _bang_shuffle(self, room_id: str, sender: str, args: str):
+        player = await self.queue_manager.get_player(room_id)
+        count = player.shuffle_queue()
+        if count > 1:
+            await self.send_message(room_id, f"🔀 Shuffled {count} tracks in the queue.")
+        elif count == 1:
+            await self.send_message(room_id, "⚠️ Only one track in the queue — nothing to shuffle.")
+        else:
+            await self.send_message(room_id, "📭 The queue is empty.")
+
+    async def _bang_remove(self, room_id: str, sender: str, args: str):
+        try:
+            position = int(args.strip())
+        except ValueError:
+            await self.send_message(room_id, "⚠️ Usage: `!remove <position>` (use `!queue` to see positions)")
+            return
+
+        if position < 1:
+            await self.send_message(room_id, "⚠️ Position must be 1 or higher (use `!queue` to see positions).")
+            return
+
+        player = await self.queue_manager.get_player(room_id)
+        removed = player.remove_from_queue(position)
+        if removed:
+            await self.send_message(room_id, f"🗑️ Removed **{removed.title}** from position {position}.")
+        else:
+            queue_len = len(player.get_queue())
+            if queue_len == 0:
+                await self.send_message(room_id, "📭 The queue is empty.")
+            else:
+                await self.send_message(room_id, f"⚠️ Invalid position. Queue has {queue_len} track(s).")
+
+    async def _bang_clear(self, room_id: str, sender: str, args: str):
+        player = await self.queue_manager.get_player(room_id)
+        count = player.clear_queue()
+        if count > 0:
+            await self.send_message(room_id, f"🗑️ Cleared {count} upcoming track(s) from the queue.")
+        else:
+            await self.send_message(room_id, "📭 The queue is already empty.")
 
     async def _bang_progress(self, room_id: str, sender: str, args: str):
         player = await self.queue_manager.get_player(room_id)

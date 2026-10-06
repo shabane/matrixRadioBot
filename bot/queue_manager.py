@@ -5,7 +5,8 @@ Manages per-room playback queues, sequential song playback, and voice client lif
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+import random
+from typing import Dict, List, Optional, Tuple
 from bot.song_resolver import SongResolver, ResolvedSong
 from bot.livekit_voice import LiveKitVoiceClient
 from bot.audio_settings import AudioSettings
@@ -114,25 +115,25 @@ class RoomPlayer:
         Returns the number of tracks found (not yet all resolved), or None if the
         playlist could not be read at all.
         """
-        queries = await self.resolver.resolve_playlist(url)
-        if not queries:
+        entries = await self.resolver.resolve_playlist(url)
+        if not entries:
             return None
 
-        asyncio.create_task(self._enqueue_playlist(queries, requested_by))
-        return len(queries)
+        asyncio.create_task(self._enqueue_playlist(entries, requested_by))
+        return len(entries)
 
-    async def _enqueue_playlist(self, queries: List[str], requested_by: str):
+    async def _enqueue_playlist(self, entries: List[Tuple[str, str]], requested_by: str):
         """Resolves playlist tracks with bounded concurrency and enqueues them in original order,
         starting playback as soon as the first one is ready. Resolving strictly one-at-a-time was
         too slow for longer playlists — each track needs its own yt-dlp network round trip, so
         !queue would look like it only had one song in it for a long time after !play."""
         semaphore = asyncio.Semaphore(PLAYLIST_RESOLVE_CONCURRENCY)
 
-        async def resolve_one(query: str) -> Optional[ResolvedSong]:
+        async def resolve_one(query: str, hint: str) -> Optional[ResolvedSong]:
             async with semaphore:
-                return await self.resolver.resolve(query, requested_by)
+                return await self.resolver.resolve(query, requested_by, hint)
 
-        tasks = [asyncio.create_task(resolve_one(q)) for q in queries]
+        tasks = [asyncio.create_task(resolve_one(q, hint)) for q, hint in entries]
 
         added = 0
         failed = 0
@@ -242,6 +243,36 @@ class RoomPlayer:
             self.loop_enabled = False
         self._persist_live_state()
         return self.loop_queue_enabled
+
+    def shuffle_queue(self) -> int:
+        """Randomly shuffles the upcoming queue in place. Returns the number of tracks shuffled."""
+        count = len(self._queue)
+        if count > 1:
+            random.shuffle(self._queue)
+            self._persist_live_state()
+        return count
+
+    def remove_from_queue(self, position: int) -> Optional[ResolvedSong]:
+        """Removes the track at 1-based position from the upcoming queue.
+
+        Returns the removed song, or None if position is out of range.
+        """
+        if position < 1 or position > len(self._queue):
+            return None
+        removed = self._queue.pop(position - 1)
+        self._persist_live_state()
+        return removed
+
+    def clear_queue(self) -> int:
+        """Clears all upcoming tracks in the queue without leaving the call.
+
+        Returns the number of tracks cleared.
+        """
+        count = len(self._queue)
+        if count > 0:
+            self._queue.clear()
+            self._persist_live_state()
+        return count
 
     def get_history(self, limit: int = 10) -> List[ResolvedSong]:
         """Returns the most recently played tracks, newest first."""

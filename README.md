@@ -58,6 +58,11 @@ Powered by **LiveKit WebRTC**, **yt-dlp**, and **FFmpeg**, it supports real-time
 | `@radio resume` | Resume paused playback |
 | `@radio skip` | Skip the currently playing track and start the next one |
 | `@radio queue` | View the list of tracks in the room's playback queue |
+| `@radio shuffle` | Randomly shuffle the upcoming playback queue |
+| `@radio remove <position>` | Remove a track from the queue by its position |
+| `@radio clear` | Clear all upcoming tracks from the queue (keeps call & current track) |
+| `@radio loop` | Toggle single-track loop (repeats current track) |
+| `@radio loopqueue` | Toggle whole-queue loop (replays queue from top) |
 | `@radio np` | Display information about the currently playing track (title, duration, source) |
 | `@radio stop` | Stop playback exactly where it is (same as pause) — queue and loop are kept, use `resume` to continue |
 | `@radio leave` | Clear the queue and immediately disconnect from the voice call |
@@ -86,6 +91,9 @@ to mention the bot.
 | `!resume` | `!rs` | Resume playback from where it stopped |
 | `!loop` | `!lp` | Toggle single-track loop (repeats the current track; auto-disables if skipped; mutually exclusive with `!loopqueue`) |
 | `!loopqueue` | `!lq` | Toggle whole-queue loop (replays the queue from the top once it ends; mutually exclusive with `!loop`) |
+| `!shuffle` | `!sh` | Randomly shuffle the upcoming playback queue |
+| `!remove <position>` | `!rm` | Remove a track from the queue by its position number |
+| `!clear` | `!cls` | Clear all upcoming tracks from the queue (keeps call & current track) |
 | `!progress` | `!pr` | Show an ASCII progress bar for the current track |
 | `!history` | `!hist` | Show recent playback history |
 

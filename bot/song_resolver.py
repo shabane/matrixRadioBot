@@ -10,7 +10,7 @@ import json
 import re
 import urllib.request
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
 import yt_dlp
@@ -49,11 +49,11 @@ class SongResolver:
         return f"{mins:02d}:{s:02d}"
 
     def _resolve_spotify_track_metadata(self, spotify_url: str) -> Optional[dict]:
-        """Extracts rich track metadata (title, artists, ISRC) from Spotify's embed page.
+        """Extracts track metadata (title, artists) from Spotify's embed page.
 
-        Uses the same __NEXT_DATA__ JSON blob that the playlist resolver already uses,
-        so no API key is needed. Returns a dict with 'title', 'artist', and 'isrc' (may
-        be empty string if Spotify didn't include it), or None on failure.
+        Tries __NEXT_DATA__ JSON first (same technique as the playlist resolver),
+        falls back to the simpler oEmbed API if the embed page parse fails.
+        Returns {'title': str, 'artist': str}, or None if both attempts fail.
         """
         m = re.search(r"open\.spotify\.com/track/([A-Za-z0-9]+)", spotify_url)
         if not m:
@@ -67,25 +67,34 @@ class SongResolver:
                 html = resp.read().decode("utf-8", errors="ignore")
 
             m2 = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
-            if not m2:
-                return None
-
-            data = json.loads(m2.group(1))
-            entity = data["props"]["pageProps"]["state"]["data"]["entity"]
-
-            title = re.sub(r"\s+", " ", (entity.get("name") or "")).strip()
-            artists = [
-                re.sub(r"\s+", " ", (a.get("name") or "")).strip()
-                for a in (entity.get("artists") or [])
-                if a.get("name")
-            ]
-            artist = ", ".join(artists)
-            isrc = ((entity.get("externalIds") or {}).get("isrc") or "").strip()
-
-            return {"title": title, "artist": artist, "isrc": isrc}
+            if m2:
+                data = json.loads(m2.group(1))
+                entity = data["props"]["pageProps"]["state"]["data"]["entity"]
+                title = re.sub(r"\s+", " ", (entity.get("name") or "")).strip()
+                artists = [
+                    re.sub(r"\s+", " ", (a.get("name") or "")).strip()
+                    for a in (entity.get("artists") or [])
+                    if a.get("name")
+                ]
+                if title:
+                    return {"title": title, "artist": ", ".join(artists)}
         except Exception as e:
-            logger.warning("Failed to extract Spotify track metadata from embed: %s", e)
-            return None
+            logger.warning("Spotify embed parse failed for %s: %s — trying oEmbed fallback", track_id, e)
+
+        # oEmbed fallback: one request, returns title only (no reliable artist field)
+        try:
+            oembed_url = f"https://open.spotify.com/oembed?url={spotify_url}"
+            req = urllib.request.Request(oembed_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            title = data.get("title", "").strip()
+            if title:
+                logger.info("Spotify oEmbed fallback succeeded for %s: %s", track_id, title)
+                return {"title": title, "artist": ""}
+        except Exception as e2:
+            logger.warning("Spotify oEmbed fallback also failed for %s: %s", track_id, e2)
+
+        return None
 
     def is_playlist_url(self, query: str) -> bool:
         """Cheap, network-free check for whether a URL points at a playlist/album/set."""
@@ -111,7 +120,7 @@ class SongResolver:
 
         return False
 
-    def _resolve_spotify_playlist_queries(self, url: str) -> Optional[List[str]]:
+    def _resolve_spotify_playlist_queries(self, url: str) -> Optional[List[Tuple[str, str]]]:
         """Scrapes the Spotify embed page for a playlist/album's track list (no API key needed)."""
         m = re.search(r"open\.spotify\.com/(playlist|album)/([A-Za-z0-9]+)", url)
         if not m:
@@ -132,21 +141,21 @@ class SongResolver:
             entity = data["props"]["pageProps"]["state"]["data"]["entity"]
             track_list = entity.get("trackList") or []
 
-            queries: List[str] = []
+            queries: List[Tuple[str, str]] = []
             for track in track_list[:PLAYLIST_ENTRY_LIMIT]:
                 title = re.sub(r"\s+", " ", (track.get("title") or "")).strip()
                 artist = re.sub(r"\s+", " ", (track.get("subtitle") or "")).strip()
                 if title and artist:
-                    queries.append(f'"{title}" "{artist}"')
+                    queries.append((f'"{title}" "{artist}"', "spotify"))
                 elif title:
-                    queries.append(title)
+                    queries.append((title, "spotify"))
 
             return queries or None
         except Exception as e:
             logger.warning("Failed to extract Spotify playlist tracks: %s", e)
             return None
 
-    def _extract_flat_playlist_queries(self, url: str) -> Optional[List[str]]:
+    def _extract_flat_playlist_queries(self, url: str) -> Optional[List[Tuple[str, str]]]:
         """Lists a YouTube playlist or SoundCloud set's tracks without fully resolving each one."""
         ydl_opts = {
             "quiet": True,
@@ -165,32 +174,32 @@ class SongResolver:
                 return None
 
             entries = info.get("entries") or []
-            queries: List[str] = []
+            queries: List[Tuple[str, str]] = []
             for entry in entries:
                 if not entry:
                     continue
-                entry_url = entry.get("url")
+                entry_url = entry.get("webpage_url") or entry.get("url")
                 if entry_url and entry_url.startswith("http"):
-                    queries.append(entry_url)
+                    queries.append((entry_url, ""))
                 elif entry.get("id"):
-                    queries.append(f"https://www.youtube.com/watch?v={entry['id']}")
+                    queries.append((f"https://www.youtube.com/watch?v={entry['id']}", ""))
 
             return queries[:PLAYLIST_ENTRY_LIMIT] or None
         except Exception as e:
             logger.error("Error extracting playlist entries for '%s': %s", url, e)
             return None
 
-    def _resolve_playlist_queries_sync(self, url: str) -> Optional[List[str]]:
+    def _resolve_playlist_queries_sync(self, url: str) -> Optional[List[Tuple[str, str]]]:
         parsed = urlparse(url)
         if "open.spotify.com" in parsed.netloc.lower():
             return self._resolve_spotify_playlist_queries(url)
         return self._extract_flat_playlist_queries(url)
 
-    async def resolve_playlist(self, url: str) -> Optional[List[str]]:
-        """Asynchronously lists a playlist's tracks as individual resolvable queries/URLs."""
+    async def resolve_playlist(self, url: str) -> Optional[List[Tuple[str, str]]]:
+        """Asynchronously lists a playlist's tracks as (query, source_type_hint) pairs."""
         return await asyncio.to_thread(self._resolve_playlist_queries_sync, url)
 
-    def _extract_sync(self, query: str, requested_by: str) -> Optional[ResolvedSong]:
+    def _extract_sync(self, query: str, requested_by: str, source_type_hint: str = "") -> Optional[ResolvedSong]:
         query = query.strip()
         parsed = urlparse(query)
         is_url = bool(parsed.scheme and parsed.netloc)
@@ -220,18 +229,8 @@ class SongResolver:
             if meta and meta.get("title"):
                 title = meta["title"]
                 artist = meta.get("artist", "")
-                isrc = meta.get("isrc", "")
-                if isrc:
-                    # ISRC is a unique per-recording code; searching it on YouTube
-                    # often surfaces the exact upload (official audio/MV).
-                    search_term = isrc
-                    logger.info("Resolved Spotify track via ISRC '%s': %s — %s", isrc, artist, title)
-                elif artist:
-                    search_term = f'"{title}" "{artist}"'
-                    logger.info("Resolved Spotify track: %s", search_term)
-                else:
-                    search_term = title
-                    logger.info("Resolved Spotify track (title only): %s", search_term)
+                search_term = f'"{title}" "{artist}"' if artist else title
+                logger.info("Resolved Spotify track: %s", search_term)
                 target_query = f"ytsearch1:{search_term}"
             else:
                 logger.warning("Could not resolve Spotify track metadata, falling back to URL search")
@@ -248,6 +247,11 @@ class SongResolver:
             source_type = "search"
             if not query.startswith("ytsearch"):
                 target_query = f"ytsearch1:{query}"
+
+        # Caller can override auto-detected source_type (e.g. Spotify playlist tracks
+        # arrive as plain search strings but should still be labelled as "spotify").
+        if source_type_hint:
+            source_type = source_type_hint
 
         # Configure yt-dlp
         ydl_opts = {
@@ -293,6 +297,6 @@ class SongResolver:
             logger.error("Error extracting info for '%s': %s", query, e)
             return None
 
-    async def resolve(self, query: str, requested_by: str) -> Optional[ResolvedSong]:
+    async def resolve(self, query: str, requested_by: str, source_type_hint: str = "") -> Optional[ResolvedSong]:
         """Asynchronously resolves a song query in a worker thread."""
-        return await asyncio.to_thread(self._extract_sync, query, requested_by)
+        return await asyncio.to_thread(self._extract_sync, query, requested_by, source_type_hint)
