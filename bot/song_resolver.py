@@ -199,6 +199,81 @@ class SongResolver:
         """Asynchronously lists a playlist's tracks as (query, source_type_hint) pairs."""
         return await asyncio.to_thread(self._resolve_playlist_queries_sync, url)
 
+    def _select_best_audio_entry(self, entries: list, original_query: str) -> dict:
+        """Picks the best audio/studio track from multiple search results, prioritizing
+        official audio, YouTube Music Topic channels, and album tracks over cinematic music videos."""
+        if not entries:
+            return {}
+        if len(entries) == 1:
+            return entries[0]
+
+        q_lower = original_query.lower()
+        explicit_video = any(w in q_lower for w in ("video", "mv", "clip", "film"))
+        explicit_live = "live" in q_lower
+        explicit_remix = "remix" in q_lower
+        explicit_cover = "cover" in q_lower
+
+        best_entry = entries[0]
+        best_score = -999
+
+        for i, e in enumerate(entries):
+            title = (e.get("title") or "").lower()
+            channel = (e.get("channel") or e.get("uploader") or "").lower()
+            score = 0
+
+            # 1. Topic channel (YouTube Music official release) has pristine studio audio
+            if channel.endswith(" - topic") or "topic" in channel:
+                score += 50
+
+            # 2. Audio badges in title
+            if any(k in title for k in ("(official audio)", "[official audio]", "(audio)", "[audio]", "official audio")):
+                score += 40
+            elif any(k in title for k in ("(lyrics)", "[lyrics]", "official lyric video", "(lyric video)")):
+                score += 20
+
+            # 3. Explicit video vs audio preference
+            if explicit_video:
+                if any(k in title for k in ("official music video", "official video", "music video", "[mv]", "(mv)", "video")):
+                    score += 60
+            else:
+                if any(k in title for k in ("official music video", "official video", "music video", "[mv]", "(mv)", "official 4k video")):
+                    score -= 30
+                elif any(k in title for k in ("video", "clip")):
+                    score -= 15
+
+            # 4. Live
+            if explicit_live:
+                if "live" in title:
+                    score += 60
+            else:
+                if "live" in title:
+                    score -= 25
+
+            # 5. Remix
+            if explicit_remix:
+                if "remix" in title:
+                    score += 60
+            else:
+                if "remix" in title:
+                    score -= 25
+
+            # 6. Cover
+            if explicit_cover:
+                if "cover" in title:
+                    score += 60
+            else:
+                if "cover" in title:
+                    score -= 30
+
+            # 7. Preserve ranking order bias: higher ranked results get slight bump
+            score += max(10 - i * 2, 0)
+
+            if score > best_score:
+                best_score = score
+                best_entry = e
+
+        return best_entry
+
     def _extract_sync(self, query: str, requested_by: str, source_type_hint: str = "") -> Optional[ResolvedSong]:
         query = query.strip()
         parsed = urlparse(query)
@@ -231,10 +306,10 @@ class SongResolver:
                 artist = meta.get("artist", "")
                 search_term = f'"{title}" "{artist}"' if artist else title
                 logger.info("Resolved Spotify track: %s", search_term)
-                target_query = f"ytsearch1:{search_term}"
+                target_query = f"ytsearch5:{search_term}"
             else:
                 logger.warning("Could not resolve Spotify track metadata, falling back to URL search")
-                target_query = f"ytsearch1:{query}"
+                target_query = f"ytsearch5:{query}"
 
         # 3. SoundCloud
         elif "soundcloud.com" in query:
@@ -246,7 +321,7 @@ class SongResolver:
         elif not is_url:
             source_type = "search"
             if not query.startswith("ytsearch"):
-                target_query = f"ytsearch1:{query}"
+                target_query = f"ytsearch5:{query}"
 
         # Caller can override auto-detected source_type (e.g. Spotify playlist tracks
         # arrive as plain search strings but should still be labelled as "spotify").
@@ -272,15 +347,17 @@ class SongResolver:
                     return None
 
                 if "entries" in info and info["entries"]:
-                    entry = info["entries"][0]
+                    entries = [e for e in info["entries"] if e]
+                    entry = self._select_best_audio_entry(entries, query)
                 else:
                     entry = info
 
                 title = entry.get("title", "Unknown Title")
                 duration = int(entry.get("duration") or 0)
                 uploader = entry.get("uploader") or entry.get("channel") or "Unknown Artist"
-                webpage_url = entry.get("webpage_url") or (query if is_url else f"https://www.youtube.com/watch?v={entry.get('id')}")
-                target = entry.get("webpage_url") or entry.get("url") or target_query
+                entry_url = entry.get("webpage_url") or entry.get("url") or f"https://www.youtube.com/watch?v={entry.get('id')}"
+                webpage_url = query if (is_url and source_type != "spotify") else entry_url
+                target = entry_url
 
                 return ResolvedSong(
                     title=title,
